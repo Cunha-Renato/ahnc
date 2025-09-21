@@ -1,1 +1,0 @@
-cargo ndk --target arm64-v8a build
