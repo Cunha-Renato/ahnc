@@ -1,4 +1,4 @@
-package com.example.ahnc.ui.theme
+package com.ahnc.ui.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
