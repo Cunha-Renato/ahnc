@@ -1,51 +1,63 @@
 package com.ahnc
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.annotation.RequiresPermission
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
 import androidx.core.content.ContextCompat
 import com.ahnc.ui.DebugConsole
 import com.ahnc.ui.DebugMessageType
 import com.ahnc.ui.HandlePermissions
 import com.ahnc.ui.PermissionDialogView
+import com.ahnc.ui.debug
+import com.ahnc.ui.info
 import com.ahnc.ui.theme.AhncTheme
 import com.ahnc.ui.tryLog
 
 class MainActivity : ComponentActivity() {
-    private var permissions = arrayOf(
-        Manifest.permission.ACCESS_FINE_LOCATION,
-        Manifest.permission.NEARBY_WIFI_DEVICES,
-    )
+    private var permissions: Array<String>
 
     private val permissionDialog by viewModels<PermissionDialogView>()
+    private var ahnc = AhncCore(this)
 
-    private lateinit var wifiDirectManager: WifiDirectManager
-    private lateinit var wifiDirectBroadcastReceiver : WifiDirectBroadcastReceiver
+    init {
+        if (Build.VERSION.SDK_INT >= 33) {
+            this.permissions = arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.NEARBY_WIFI_DEVICES,
+            )
+        } else {
+            this.permissions = arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+            )
+        }
+    }
 
+    @SuppressLint("MissingPermission")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        tryLog(DebugMessageType.Error) {
-            this.wifiDirectManager = WifiDirectManager(this)
-        }
-
+        this.ahnc.onCreate()
         this.showUi()
     }
 
@@ -56,44 +68,43 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-
-        tryLog(DebugMessageType.Error) {
-            this.wifiDirectBroadcastReceiver = WifiDirectBroadcastReceiver()
-        }
-
-        ContextCompat.registerReceiver(
-            this,
-            this.wifiDirectBroadcastReceiver,
-            this.wifiDirectManager.intentFilter,
-            ContextCompat.RECEIVER_NOT_EXPORTED
-        )
+        this.ahnc.registerReceiver()
     }
 
     override fun onPause() {
         super.onPause()
-        this.unregisterReceiver(this.wifiDirectBroadcastReceiver)
+        this.ahnc.unregisterReceiver()
     }
 
+    @SuppressLint("MissingPermission")
     fun showUi() {
         setContent {
             AhncTheme {
                 HandlePermissions(this, this.permissions, this.permissionDialog)
 
                 Column(
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(WindowInsets.safeDrawing.asPaddingValues())
                 ) {
-                    Row(
+                    Column(
                         modifier = Modifier
                             .weight(1f)
-                            .fillMaxWidth(0.5f)
-                            .background(Color.Red)
+                            .padding(all = Dp(15f))
                     ) {
                         Button({
-                            DebugConsole.log(DebugMessageType.Warn, "Test")
+                            this@MainActivity.ahnc.initiatePeersDiscovery()
                         }) {
-                            Text("Warn")
+                            Text("Init Peer Discovery")
+                        }
+
+                        Button({
+                            DebugConsole.clear()
+                        }) {
+                            Text("Clear Console")
                         }
                     }
+
                     DebugConsole.Compose()
                 }
             }
@@ -101,10 +112,74 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+class AhncCore(
+    private val activity: MainActivity,
+) {
+    private lateinit var wifiManager: WifiDirectManager
+    private lateinit var wifiBroadcastReceiver: WifiDirectBroadcastReceiver
+
+    fun onCreate() {
+        tryLog(DebugMessageType.Error) {
+            this.wifiManager = WifiDirectManager(this.activity)
+        }
+    }
+
+    fun registerReceiver() {
+        tryLog(DebugMessageType.Error) {
+            this.wifiBroadcastReceiver = WifiDirectBroadcastReceiver(this.wifiManager)
+
+            ContextCompat.registerReceiver(
+                this.activity,
+                this.wifiBroadcastReceiver,
+                this.wifiManager.intentFilter,
+                ContextCompat.RECEIVER_NOT_EXPORTED
+            )
+        }
+    }
+
+    fun unregisterReceiver() {
+        tryLog(DebugMessageType.Error) {
+            this.activity.unregisterReceiver(this.wifiBroadcastReceiver)
+        }
+    }
+
+    @RequiresPermission(allOf = [Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.NEARBY_WIFI_DEVICES])
+    fun initiatePeersDiscovery() {
+        tryLog(DebugMessageType.Error) {
+            this.wifiManager.discoverPeers(object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    info("Peers discovery initialized.")
+                }
+
+                override fun onFailure(reason: Int) {
+                    error("Peers discovery failed. Try again...")
+                }
+            })
+        }
+    }
+}
+
 class WifiDirectManager(context: Context) {
     val intentFilter = IntentFilter()
-    private var manager: WifiP2pManager
+    var inner: WifiP2pManager
     private var channel: WifiP2pManager.Channel
+    private val peers = mutableListOf<WifiP2pDevice>()
+    private val peersListListener = WifiP2pManager.PeerListListener { peerList ->
+        val refreshedPeers = peerList.deviceList
+        if (refreshedPeers != this.peers) {
+            this.peers.clear()
+            peers.addAll(refreshedPeers)
+        }
+
+        if (this.peers.isEmpty()) {
+            debug("No peers found.")
+            return@PeerListListener
+        }
+
+        this.peers.forEach { peer ->
+            debug("Peer: $peer.")
+        }
+    }
 
     init {
         this.intentFilter.addAction(WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION)
@@ -112,34 +187,45 @@ class WifiDirectManager(context: Context) {
         this.intentFilter.addAction(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION)
         this.intentFilter.addAction(WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION)
 
-        this.manager = context.getSystemService(Context.WIFI_P2P_SERVICE) as WifiP2pManager
-        this.channel = this.manager.initialize(context, context.mainLooper, null)
+        this.inner = context.getSystemService(Context.WIFI_P2P_SERVICE) as WifiP2pManager
+        this.channel = this.inner.initialize(context, context.mainLooper, null)
     }
 
     @RequiresPermission(allOf = [Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.NEARBY_WIFI_DEVICES])
-    // TODO!
     fun discoverPeers(listener: WifiP2pManager.ActionListener) {
-        this.manager.discoverPeers(this.channel, listener)
+        this.inner.discoverPeers(this.channel, listener)
+    }
+
+    @RequiresPermission(allOf = [Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.NEARBY_WIFI_DEVICES])
+    fun requestPeers() {
+        this.inner.requestPeers(this.channel, this.peersListListener)
     }
 }
 
-class WifiDirectBroadcastReceiver: BroadcastReceiver() {
+class WifiDirectBroadcastReceiver(private val manager: WifiDirectManager): BroadcastReceiver() {
+    @SuppressLint("MissingPermission")
     override fun onReceive(context: Context, intent: Intent) {
-        when(intent.action) {
-            WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION -> {
-                val state = intent.getIntExtra(WifiP2pManager.EXTRA_WIFI_STATE, -1)
-                val wifiEnabled = state == WifiP2pManager.WIFI_P2P_STATE_ENABLED
-                DebugConsole.log(DebugMessageType.Info, "WifiP2p changed.")
-                DebugConsole.log(DebugMessageType.Info, "WifiP2p is enabled: ${wifiEnabled}.")
-            }
-            WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION -> {
-                DebugConsole.log(DebugMessageType.Info, "WifiP2p peers changed.")
-            }
-            WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION -> {
-                DebugConsole.log(DebugMessageType.Info, "WifiP2p connection changed.")
-            }
-            WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION -> {
-                DebugConsole.log(DebugMessageType.Info, "WifiP2p this device changed.")
+        tryLog(DebugMessageType.Error) {
+            when (intent.action) {
+                WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION -> {
+                    val state = intent.getIntExtra(WifiP2pManager.EXTRA_WIFI_STATE, -1)
+                    val wifiEnabled = state == WifiP2pManager.WIFI_P2P_STATE_ENABLED
+                    DebugConsole.log(DebugMessageType.Info, "WifiP2p changed.")
+                    DebugConsole.log(DebugMessageType.Info, "WifiP2p is enabled: ${wifiEnabled}.")
+                }
+
+                WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION -> {
+                    DebugConsole.log(DebugMessageType.Info, "WifiP2p peers changed.")
+                    this.manager.requestPeers()
+                }
+
+                WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION -> {
+                    DebugConsole.log(DebugMessageType.Info, "WifiP2p connection changed.")
+                }
+
+                WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION -> {
+                    DebugConsole.log(DebugMessageType.Info, "WifiP2p this device changed.")
+                }
             }
         }
     }
