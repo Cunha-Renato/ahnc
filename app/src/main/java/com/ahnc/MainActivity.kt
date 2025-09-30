@@ -167,7 +167,20 @@ class AhncCore {
                 }
 
                 override fun onFailure(reason: Int) {
-                    logError("Peers discovery failed. Try again...")
+                    var reasonStr = "Unknown"
+                    when(reason) {
+                        WifiP2pManager.P2P_UNSUPPORTED -> {
+                            reasonStr = "P2P_UNSUPPORTED"
+                        }
+                        WifiP2pManager.ERROR -> {
+                            reasonStr = "INTERNAL_ERROR"
+                        }
+                        WifiP2pManager.BUSY -> {
+                            reasonStr = "BUSY"
+                        }
+                    }
+
+                    logError("Peers discovery failed, reason: $reasonStr. Try again...")
                 }
             })
         }
