@@ -114,7 +114,7 @@ fun HandlePermissions(
         val isGranted = activity.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
 
         launch = !isGranted
-        if (launch) { warn("Permission is not granted: $permission.") }
+        if (launch) { logWarn("Permission is not granted: $permission.") }
     }
 
     if (launch) {

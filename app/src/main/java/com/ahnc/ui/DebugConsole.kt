@@ -98,15 +98,15 @@ fun<T> tryLog(type: DebugMessageType, action: () -> T) {
     }
 }
 
-fun info(msg: String) {
+fun logInfo(msg: String) {
     DebugConsole.log(DebugMessageType.Info, msg)
 }
-fun debug(msg: String) {
+fun logDebug(msg: String) {
     DebugConsole.log(DebugMessageType.Debug, msg)
 }
-fun warn(msg: String) {
+fun logWarn(msg: String) {
     DebugConsole.log(DebugMessageType.Warn, msg)
 }
-fun error(msg: String) {
+fun logError(msg: String) {
     DebugConsole.log(DebugMessageType.Error, msg)
 }
