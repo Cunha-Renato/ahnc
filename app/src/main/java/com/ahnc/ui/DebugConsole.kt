@@ -26,6 +26,9 @@ enum class DebugMessageType {
 
 class DebugMessage(val type: DebugMessageType, val msg: String)
 
+/**
+ * This is a singleton class, made to display logs inside the application itself.
+ */
 class DebugConsole private constructor() {
     companion object {
         @Volatile
@@ -45,6 +48,7 @@ class DebugConsole private constructor() {
             this.get().messages.clear()
         }
 
+        // This is the ui.
         @Composable
         fun Compose() {
             val scrollState = rememberScrollState()
@@ -90,6 +94,9 @@ class DebugConsole private constructor() {
     private var messages = mutableStateListOf<DebugMessage>()
 }
 
+/**
+ * try / catch(e: Exception), that logs the Exception as a DebugMessage, with type specified.
+ */
 fun<T> tryLog(type: DebugMessageType, action: () -> T) {
     try {
         action()

@@ -51,6 +51,7 @@ class PermissionDialogView: ViewModel() {
         this.launchAppSettings.update { value }
     }
 
+    // This is the ui that shows if the user denies any permission.
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     fun Compose(
@@ -89,6 +90,8 @@ class PermissionDialogView: ViewModel() {
     }
 }
 
+// This contains the logic for the permissions.
+// Also is the ui.
 @Composable
 fun HandlePermissions(
     activity: Activity,

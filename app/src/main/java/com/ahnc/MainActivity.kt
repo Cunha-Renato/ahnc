@@ -38,12 +38,18 @@ import com.ahnc.ui.theme.AhncTheme
 import com.ahnc.ui.tryLog
 
 class MainActivity : ComponentActivity() {
+    // List of permissions that we need.
     private var permissions: Array<String>
 
     private val ahnc = AhncCore()
+
+    // Pop up and reinforcement of permissions.
     private val permissionDialog by viewModels<PermissionDialogView>()
 
     init {
+        // This cheks for the API version, in this case on APIs lower than 33 (Android 13)
+        // the permission NEARBY_WIFI_DEVICES don't exist, so we don't add it on the list of
+        // permissions. (If you find something similar to this now you know).
         if (Build.VERSION.SDK_INT >= 33) {
             this.permissions = arrayOf(
                 Manifest.permission.ACCESS_FINE_LOCATION,
@@ -127,11 +133,16 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/**
+ * This should be where the main logic for Ahnc lives, for now it only checks for peers.
+ */
 class AhncCore {
     private lateinit var activity: MainActivity
     private lateinit var wifiManager: WifiDirectManager
     private lateinit var wifiBroadcastReceiver: WifiDirectBroadcastReceiver
 
+    // We need this because we can't create WifiDirectManager on the constructor, since
+    // it needs the context to be initialized (MainActivity::onCreate()).
     fun onCreate(activity: MainActivity) {
         tryLog(DebugMessageType.Error) {
             this.activity = activity
@@ -188,6 +199,7 @@ class AhncCore {
 }
 
 class WifiDirectManager(context: Context) {
+    // Actions to filter.
     val intentFilter = IntentFilter()
     var inner: WifiP2pManager
     private var channel: WifiP2pManager.Channel
