@@ -2,7 +2,6 @@ import 'package:ahnc/device_manager.dart';
 import 'package:ahnc/widgets/debug_console.dart';
 import 'package:ahnc/widgets/permission.dart';
 import 'package:flutter/material.dart';
-import 'package:permission_handler/permission_handler.dart';
 
 class Routes {
     static const String connectionManager = '/connections';
@@ -13,13 +12,6 @@ void main() {
 }
 
 class App extends StatelessWidget {
-    static const permissions = [
-        Permission.location,
-        Permission.nearbyWifiDevices,
-        Permission.bluetoothAdvertise,
-        Permission.bluetoothConnect,
-        Permission.bluetoothScan,
-    ];
     const App({super.key});
 
     @override
@@ -59,9 +51,7 @@ class HomePageState extends State<HomePage> {
                 child: Column(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
-                        HandlePermissions(
-                            permissions: App.permissions,
-                        ),
+                        HandlePermissions(),
                         ElevatedButton(
                             onPressed: () {
                                 Navigator.pushNamed(context, Routes.connectionManager);

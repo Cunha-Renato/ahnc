@@ -12,6 +12,7 @@ dependencies:
     sdk: flutter
   permission_handler: ^12.0.1
   nearby_connections: ^4.3.0
+  device_info_plus: ^12.2.0
 
 dev_dependencies:
   flutter_test:

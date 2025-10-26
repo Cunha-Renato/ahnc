@@ -111,7 +111,8 @@ class _ConnectionManager {
     final String serviceId = 'com.ahnc';
     final strategy = Strategy.P2P_CLUSTER;
     final nearby = Nearby();
-    final connectedDevices = <DeviceInfo>[];
+    final connectedDevices = <String, DeviceInfo>{};
+    final devicesAboutToConnect = <String, DeviceInfo>{};
     ValueNotifier<bool> isRunning = ValueNotifier<bool>(false);
 
     String? deviceName;
@@ -126,6 +127,14 @@ class _ConnectionManager {
 
     bool isInitialized() {
         return deviceName != null;
+    }
+
+    bool isConnectedTo(String id) {
+        return connectedDevices.containsKey(id);
+    }
+    
+    bool isConnectingTo(String id) {
+        return devicesAboutToConnect.containsKey(id) || isConnectedTo(id);
     }
 
     Future<void> _begin() async {
@@ -173,28 +182,67 @@ class _ConnectionManager {
                 onEndpointFound: onEndpointFound,
                 onEndpointLost: onEndpointLost,
             );
+
+            DebugConsole.log(DebugMessageType.info, 'Started discovery');
         });
     }
     
     void onConnectionInitiated(String id, ConnectionInfo info) {
-        DebugConsole.log(DebugMessageType.info, 'Connection initiated from $id');
+        DebugConsole.log(DebugMessageType.info, 'Connection initiated from ${info.endpointName} ($id).');
+
+        tryLogAsync(DebugMessageType.error, () async {
+            if (!isConnectingTo(id)) return;
+
+            await nearby.acceptConnection(
+                id, 
+                onPayLoadRecieved: (_, _) {}
+            );
+        });
     }
     
     void onConnectionResult(String id, Status status) {
         DebugConsole.log(DebugMessageType.info, 'Connection result from $id: $status');
+        DeviceInfo? deviceInfo = devicesAboutToConnect.remove(id);
+
+        tryLog(DebugMessageType.error, () {
+            switch (status) {
+                case Status.CONNECTED:
+                    connectedDevices[id] = deviceInfo!;
+                    break;
+                default:
+                    break;
+            }
+        });
     }
     
     void onDisconnected(String id) {
-        DebugConsole.log(DebugMessageType.info, 'Disconnected from $id');
+        devicesAboutToConnect.remove(id);
+        DeviceInfo? deviceInfo = connectedDevices.remove(id);
+        String deviceName = deviceInfo?.name ?? "Unknown Device";
+        DebugConsole.log(DebugMessageType.info, 'Disconnected from $deviceName ($id)');
     }
     
     void onEndpointFound(String id, String name, String serviceId) {
         DebugConsole.log(DebugMessageType.info, 'Endpoint found: $name ($id)');
+        tryLogAsync(DebugMessageType.error, () async {
+            if (!isConnectingTo(id)) {
+                devicesAboutToConnect[id] = DeviceInfo(name);
+
+                await nearby.requestConnection(
+                    deviceName!,
+                    id, 
+                    onConnectionInitiated: onConnectionInitiated, 
+                    onConnectionResult: onConnectionResult, 
+                    onDisconnected: onDisconnected
+                );
+            }
+        });
     }
     
     void onEndpointLost(String? id) {
         if (id == null) return;
 
+        devicesAboutToConnect.remove(id);
         DebugConsole.log(DebugMessageType.info, 'Endpoint lost: $id');
     }
 }

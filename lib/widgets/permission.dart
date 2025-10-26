@@ -1,3 +1,4 @@
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -16,10 +17,9 @@ class PermissionDialog {
 }
 
 class HandlePermissions extends StatefulWidget {
-    final List<Permission> permissions;
     final PermissionDialog dialog = PermissionDialog();
     
-    HandlePermissions({super.key, required this.permissions});
+    HandlePermissions({super.key});
     
     @override
     State<HandlePermissions> createState() => _HandlePermissionsState();
@@ -32,9 +32,37 @@ class _HandlePermissionsState extends State<HandlePermissions> {
         _checkAndRequestPermissions();
     }
     
+    Future<List<Permission>> _getRequiredPermissions() async {
+        final deviceInfo = DeviceInfoPlugin();
+        final androidInfo = await deviceInfo.androidInfo;
+        final sdkInt = androidInfo.version.sdkInt;
+
+        List<Permission> permissions = [];
+
+        if (sdkInt >= 31) { // Android 12 and above
+            permissions.addAll([
+                Permission.bluetoothAdvertise,
+                Permission.bluetoothConnect,
+                Permission.bluetoothScan,
+            ]);
+        }
+
+        if (sdkInt >= 30) { // Android 11 and above
+            permissions.add(Permission.nearbyWifiDevices);
+        }
+
+        if (sdkInt >= 29) { // Android 10 and above
+            permissions.add(Permission.location);
+        }
+
+        return permissions;
+    }
+
     Future<void> _checkAndRequestPermissions() async {
-        for (final permission in widget.permissions) {
-            await permission.request();
+        final permissions = await _getRequiredPermissions();
+        await permissions.request();
+
+        for (final permission in permissions) {
             final status = await permission.status;
             
             if (status.isDenied || status.isPermanentlyDenied) {
