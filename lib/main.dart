@@ -1,19 +1,26 @@
-import 'package:ahnc/device_manager.dart';
+import 'package:ahnc/widgets/connections.dart';
 import 'package:ahnc/widgets/debug_console.dart';
 import 'package:ahnc/widgets/permission.dart';
 import 'package:flutter/material.dart';
 
 class Routes {
-    static const String connectionManager = '/connections';
+    static const String connections = '/connections';
 }
 
 void main() {
     runApp(const App());
 }
 
-class App extends StatelessWidget {
+class App extends StatefulWidget {
     const App({super.key});
+    
+    final ConnectionsPage connectionManagerPage = const ConnectionsPage();
 
+    @override
+    State<App> createState() => AppState();
+}
+
+class AppState extends State<App> {
     @override
     Widget build(BuildContext context) {
         return MaterialApp(
@@ -24,7 +31,7 @@ class App extends StatelessWidget {
             ),
             home: const HomePage(title: 'Ahnc'),
             routes: Map.of({
-                Routes.connectionManager: (context) => const ConnectionManagerPage(),
+                Routes.connections: (context) => super.widget.connectionManagerPage,
             }),
         );
     }
@@ -54,7 +61,7 @@ class HomePageState extends State<HomePage> {
                         HandlePermissions(),
                         ElevatedButton(
                             onPressed: () {
-                                Navigator.pushNamed(context, Routes.connectionManager);
+                                Navigator.pushNamed(context, Routes.connections);
                             },
                             child: const Text('Connections'), 
                         ),
