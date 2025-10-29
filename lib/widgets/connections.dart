@@ -1,7 +1,5 @@
 import 'package:ahnc/network_manager.dart';
-import 'package:ahnc/widgets/debug_console.dart';
 import 'package:flutter/material.dart';
-import 'package:nearby_connections/nearby_connections.dart';
 
 class ConnectionsPage extends StatefulWidget {
     const ConnectionsPage({super.key});

@@ -1,126 +1,250 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:ahnc/message.dart';
 import 'package:ahnc/widgets/debug_console.dart';
 import 'package:flutter/widgets.dart';
 import 'package:nearby_connections/nearby_connections.dart';
-import 'package:uuid/uuid.dart';
 
 class NodeInfo {
     final String deviceName;
-    /// This should be a direct connected device.
-    final String? imediateNodeName;
     int cost;
     
-    NodeInfo({required this.deviceName, required this.imediateNodeName, required this.cost});
+    NodeInfo({required this.deviceName, required this.cost});
 }
 
-sealed class Message {
-    final String id = Uuid().v4();
-    final String destination;
-
-    Message({required this.destination});
+class DeviceInfo {
+    final String id;
+    final String name;
+    
+    DeviceInfo({required this.id, required this.name});
 }
 
-class TextMessage extends Message {
-    final String text;
+class DeviceRoutingTable {
+    final DeviceInfo info;
+    List<NodeInfo> nodes = [];
 
-    TextMessage({required super.destination, required this.text});
-}
-
-class RouteUpdateMessage extends Message {
-    final List<NodeInfo> nodes;
-
-    RouteUpdateMessage({required super.destination, required this.nodes});
-}
-
-class AckMessage extends Message {
-    final String messageId;
-
-    AckMessage({required super.destination, required this.messageId});
-}
-
-class ErrorMessage extends Message {
-    final String messageId;
-    final String error;
-
-    ErrorMessage({
-        required super.destination,
-        required this.messageId,
-        required this.error
-    });
+    DeviceRoutingTable({required this.info});
 }
 
 class RoutingManager {
     final String localDeviceName;
-    final Map<String, NodeInfo> routingTable = {};
-    /// (Connection ID, Device Name)
-    final Map<String, String> directConnections = {};
-    final Map<String, String> stagedConnections = {};
+    final List<DeviceRoutingTable> directConnections = [];
+    final List<DeviceInfo> stagedConnections = [];
+    /// String: id
+    final Future<void> Function(String, Message) onSendMessage;
     
-    RoutingManager({required this.localDeviceName});
+    RoutingManager({required this.localDeviceName, required this.onSendMessage}) {
+        Timer.periodic(const Duration(seconds: 15), (_) {
+            logInfo("Preparing for update.");
+            for (DeviceRoutingTable table in directConnections) {
+                logInfo("Sending update to: ${table.info.name}.");
+                final nodes = _prepareRoutingTableToSend(table.info);
+                onSendMessage(table.info.id, RouteUpdateMessage(
+                    destination: table.info.name,
+                    nodes: nodes
+                ));
+            }
+        });
+    }
 
     void stageConnection(String connectionId, String deviceName) {
-        stagedConnections[connectionId] = deviceName;
+        stagedConnections.add(DeviceInfo(id: connectionId, name: deviceName));
     }
     
-    String? unstageConnection(String connectionId) {
-        return stagedConnections.remove(connectionId);
+    DeviceInfo? unstageConnection(String connectionId) {
+        for (DeviceInfo info in stagedConnections) {
+            if (info.id == connectionId) return info;
+        }
+        
+        return null;
     }
     
     void addConnection(String connectionId) {
-        if (stagedConnections.containsKey(connectionId)) {
-            directConnections[connectionId] = stagedConnections.remove(connectionId)!;
+        for (DeviceInfo info in stagedConnections) {
+            if (info.id == connectionId) {
+                directConnections.add(DeviceRoutingTable(info: info));
+                unstageConnection(connectionId);
+                break;
+            }
         }
+    
+        return null;
     }
 
-    String? removeConnection(String connectionId) {
-        return directConnections.remove(connectionId);
+    DeviceInfo? removeConnection(String connectionId) {
+        DeviceRoutingTable? removed;
+        for (var i = 0; i < directConnections.length; i++) {
+            if (directConnections[i].info.id == connectionId) {
+                removed = directConnections.removeAt(i);
+                break;
+            }
+        }
+        
+        if (removed != null) return removed.info;
+        else return null;
     }
     
     bool isConnectedTo(String connectionId) {
-        return directConnections.containsKey(connectionId);
+        for (DeviceRoutingTable table in directConnections) {
+            if (table.info.id == connectionId) return true;
+        }
+    
+        return false;
     }
 
-    void onMessageReceived(Message msg) {
+    void onMessageReceived(String connectionId, Message msg) {
+        DeviceInfo? sender;
+
+        for (DeviceRoutingTable table in directConnections) {
+            if (table.info.id == connectionId) {
+                sender = table.info;
+                break;
+            }
+        }
+
+        if (sender == null) {
+            logError("Received message from unknown device. ($connectionId)");
+            return;
+        }
+
         switch (msg) {
             case TextMessage():
-                _handleTextMessage(msg);
+                _handleTextMessage(sender, msg);
                 break;
             case RouteUpdateMessage():
-                _handleRouteUpdateMessage(msg);
+                _handleRouteUpdateMessage(sender, msg);
                 break;
             case AckMessage():
-                throw UnimplementedError();
+                logInfo("AckMessage: from ${sender.name}.");
             case ErrorMessage():
-                throw UnimplementedError();
+                logError("ErrorMessage: from ${sender.name}.");
         }
     }
     
-    void _handleTextMessage(TextMessage msg) {
+    void _handleTextMessage(DeviceInfo sender, TextMessage msg) {
         if (msg.destination == localDeviceName) {
-            logInfo(msg.text);
+            onSendMessage(
+                sender.id, 
+                AckMessage(destination: sender.name, messageId: msg.id)
+            );
+
             return;
         }
+    
+        _forwardMessage(msg);
     }
     
-    void _handleRouteUpdateMessage(RouteUpdateMessage msg) {
+    void _handleRouteUpdateMessage(DeviceInfo sender, RouteUpdateMessage msg) {
         // We do not expect to receive route updates not meant for us.
         if (msg.destination != localDeviceName) {
+            logWarn("Received route update from a non neighbor: ${msg.destination}");
             return;
-        }
+        }     
+
+        _updateRoutingTableIncoming(sender, msg.nodes);
+
+        onSendMessage(sender.id, AckMessage(
+            destination: sender.name, 
+            messageId: msg.id
+        ));
+    }
     
-        logWarn("Received route update from a non neighbor: ${msg.destination}");
+    void _forwardMessage(Message msg) {
+        for (DeviceRoutingTable table in directConnections) {
+            if (table.info.name == msg.destination) {
+                onSendMessage(table.info.id, msg);
+                return;
+            }
+
+            for (NodeInfo tableEntry in table.nodes) {
+                if (tableEntry.deviceName == msg.destination) {
+                    onSendMessage(table.info.id, msg);
+                    return;
+                }
+            }
+        }
+    }
+
+    void _updateRoutingTableIncoming(DeviceInfo sender, List<NodeInfo> incomingTable) {
+        // Removing ineficient.
+        final List<int> toRemoveIncoming = [];
+        int? tableIndex;
+        for (int i = 0; i < incomingTable.length; i++) {
+            // Updating hop count.
+            incomingTable[i].cost += 1;
+
+            for (DeviceRoutingTable table in directConnections) {
+                // The same table we're updating later.
+                if (table.info == sender) {
+                    // For use later.
+                    tableIndex = i;
+                    continue;
+                };
+                
+                // This means that one of the incoming table node is a direct connection.
+                // Or we are in the table.
+                if (incomingTable[i] == table.info.name || incomingTable[i].deviceName == localDeviceName) {
+                    toRemoveIncoming.add(i);
+                    continue;
+                }
+
+                final List<int> toRemoveInternal = [];
+                for (int j = 0; j < table.nodes.length; j++) {
+                    if (incomingTable[i].deviceName == table.nodes[j].deviceName) {
+                        // Incoming is worse than others.
+                        if (incomingTable[i].cost > table.nodes[j].cost) {
+                            toRemoveIncoming.add(i);
+                        } else {
+                            toRemoveInternal.add(j);
+                        }
+                    }
+                }
+                
+                // Removing this one's.
+                for (int toRemove in toRemoveInternal) {
+                    table.nodes.removeAt(toRemove);
+                }
+            }
+        }
+        
+        // Removing incoming.
+        for (int toRemove in toRemoveIncoming) {
+            incomingTable.removeAt(toRemove);
+        }
+
+        // Swapping.
+        directConnections[tableIndex!].nodes = incomingTable;
+    }
+
+    List<NodeInfo> _prepareRoutingTableToSend(DeviceInfo destination) {
+        final List<NodeInfo> result = [];
+        
+        for (DeviceRoutingTable direct in directConnections) {
+            if (direct.info == destination) continue;
+            
+            result.addAll(direct.nodes);
+        }
+        
+        return result;
     }
 }
 
 class NetworkManager {
-    final RoutingManager routingManager;
+    late final RoutingManager routingManager;
     final String localDeviceName;
     final String serviceId;
     final Strategy strategy = Strategy.P2P_CLUSTER;
     final nearby = Nearby();
     ValueNotifier<bool> isRunning = ValueNotifier(false);
     
-    NetworkManager({required this.localDeviceName, this.serviceId = "com.ahnc"})
-        : routingManager = RoutingManager(localDeviceName: localDeviceName);
+    NetworkManager({required this.localDeviceName, this.serviceId = "com.ahnc"}) {
+        routingManager = RoutingManager(
+            localDeviceName: localDeviceName, 
+            onSendMessage: onSendMessage
+        );
+    }
 
     Future<void> start() async {
         await startAdvertising();
@@ -169,6 +293,15 @@ class NetworkManager {
         });
     }
     
+    Future<void> onSendMessage(String id, Message message) async {
+        tryLogAsync(DebugMessageType.error, () async {
+            final jsonString = jsonEncode(message.toJson());
+            final bytes = Uint8List.fromList(utf8.encode(jsonString));
+
+            await nearby.sendBytesPayload(id, bytes);
+        });
+    }
+
     void onEndpointFound(String id, String name, String serviceId) {
         DebugConsole.log(DebugMessageType.info, 'Endpoint found: $name ($id)');
         tryLogAsync(DebugMessageType.error, () async {
@@ -197,7 +330,7 @@ class NetworkManager {
 
             await nearby.acceptConnection(
                 id, 
-                onPayLoadRecieved: (_, _) {}
+                onPayLoadRecieved: onPayLoadRecieved
             );
         });
     }
@@ -217,15 +350,42 @@ class NetworkManager {
     }
 
     void onDisconnected(String id) {
-        String? deviceName = routingManager.removeConnection(id);
-        DebugConsole.log(DebugMessageType.info, 'Disconnected from ${deviceName ?? "Unknown Device"} ($id)');
+        DeviceInfo info = routingManager.removeConnection(id) ?? DeviceInfo(
+            id: id, 
+            name: "Unknown Device"
+        );
+        DebugConsole.log(DebugMessageType.info, 'Disconnected from ${info.name} ($id)');
     }
 
     void onEndpointLost(String? id) {
         if (id == null) return;
 
-        String? deviceName = routingManager.unstageConnection(id);
-        DebugConsole.log(DebugMessageType.info, 'Endpoint lost: ${deviceName ?? "Unknown Device"} ($id)');
+        DeviceInfo info = routingManager.unstageConnection(id) ?? DeviceInfo(
+            id: id, 
+            name: "Unknown Device"
+        );
+        DebugConsole.log(DebugMessageType.info, 'Endpoint lost: ${info.name} ($id)');
+    }
+
+    void onPayLoadRecieved(String id, Payload payload) {
+        switch (payload.type) {
+            case PayloadType.BYTES:
+                tryLog(DebugMessageType.error, () {
+                    final jsonString = utf8.decode(payload.bytes!);
+                    final data = jsonDecode(jsonString);
+
+                    // This is ugly.
+                    Message? message =
+                        TextMessage.fromJson(data)
+                        ?? RouteUpdateMessage.fromJson(data)
+                        ?? AckMessage.fromJson(data)
+                        ?? ErrorMessage.fromJson(data);
+                    
+                    routingManager.onMessageReceived(id, message!);
+                });
+                break;
+            default: break;
+        }
     }
 }
 
