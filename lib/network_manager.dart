@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:ahnc/list_notifier.dart';
 import 'package:ahnc/message.dart';
 import 'package:ahnc/widgets/debug_console.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter/widgets.dart';
 import 'package:nearby_connections/nearby_connections.dart';
 
@@ -30,23 +32,37 @@ class DeviceRoutingTable {
 
 class RoutingManager {
     final String localDeviceName;
-    final List<DeviceRoutingTable> directConnections = [];
+    final ListNotifier<DeviceRoutingTable> directConnections = ListNotifier();
     final List<DeviceInfo> stagedConnections = [];
     /// String: id
     final Future<void> Function(String, Message) onSendMessage;
+    void Function(String, TextMessage)? onLocalReceivedTextMessage;
+    bool running = false;
     
     RoutingManager({required this.localDeviceName, required this.onSendMessage}) {
-        Timer.periodic(const Duration(seconds: 15), (_) {
-            logInfo("Preparing for update.");
-            for (DeviceRoutingTable table in directConnections) {
-                logInfo("Sending update to: ${table.info.name}.");
-                final nodes = _prepareRoutingTableToSend(table.info);
-                onSendMessage(table.info.id, RouteUpdateMessage(
-                    destination: table.info.name,
-                    nodes: nodes
-                ));
+        Timer.periodic(const Duration(seconds: 15), (_) async {
+            if (!running) return;
+
+            final snapshot = List<DeviceRoutingTable>.from(directConnections.value);
+
+            for (final table in snapshot) {
+                try {
+                    logInfo("Sending update to: ${table.info.name}.");
+                    await onSendMessage(table.info.id, RouteUpdateMessage(
+                        destination: table.info.name,
+                        nodes: _prepareRoutingTableToSend(table.info),
+                    ));
+                } catch (e, st) {
+                    logError("Failed to send route update to ${table.info.name}: $e\n$st");
+                }
             }
         });
+    }
+
+
+    void clearConnections() {
+        directConnections.clear();
+        stagedConnections.clear();
     }
 
     void stageConnection(String connectionId, String deviceName) {
@@ -54,29 +70,31 @@ class RoutingManager {
     }
     
     DeviceInfo? unstageConnection(String connectionId) {
-        for (DeviceInfo info in stagedConnections) {
-            if (info.id == connectionId) return info;
+        for (int i = 0; i < stagedConnections.length; i++) {
+            final info = stagedConnections[i];
+            if (info.id == connectionId) {
+                return stagedConnections.removeAt(i);
+            }
         }
-        
+
         return null;
     }
     
     void addConnection(String connectionId) {
-        for (DeviceInfo info in stagedConnections) {
+        for (int i = 0; i < stagedConnections.length; i++) {
+            final info = stagedConnections[i];
             if (info.id == connectionId) {
                 directConnections.add(DeviceRoutingTable(info: info));
-                unstageConnection(connectionId);
+                stagedConnections.removeAt(i);
                 break;
             }
         }
-    
-        return null;
     }
 
     DeviceInfo? removeConnection(String connectionId) {
         DeviceRoutingTable? removed;
-        for (var i = 0; i < directConnections.length; i++) {
-            if (directConnections[i].info.id == connectionId) {
+        for (var i = 0; i < directConnections.len(); i++) {
+            if (directConnections.atRef(i).info.id == connectionId) {
                 removed = directConnections.removeAt(i);
                 break;
             }
@@ -87,8 +105,8 @@ class RoutingManager {
     }
     
     bool isConnectedTo(String connectionId) {
-        for (DeviceRoutingTable table in directConnections) {
-            if (table.info.id == connectionId) return true;
+        for (int i = 0; i < directConnections.len(); i++) {
+            if (directConnections.atRef(i).info.id == connectionId) return true;
         }
     
         return false;
@@ -97,9 +115,9 @@ class RoutingManager {
     void onMessageReceived(String connectionId, Message msg) {
         DeviceInfo? sender;
 
-        for (DeviceRoutingTable table in directConnections) {
-            if (table.info.id == connectionId) {
-                sender = table.info;
+        for (int i = 0; i < directConnections.len(); i++) {
+            if (directConnections.atRef(i).info.id == connectionId) {
+                sender = directConnections.atRef(i).info;
                 break;
             }
         }
@@ -111,24 +129,32 @@ class RoutingManager {
 
         switch (msg) {
             case TextMessage():
+                logInfo("TextMessage: from ${sender.name}.");
                 _handleTextMessage(sender, msg);
                 break;
             case RouteUpdateMessage():
+                logInfo("RouteUpdateMessage: from ${sender.name}.");
                 _handleRouteUpdateMessage(sender, msg);
                 break;
             case AckMessage():
                 logInfo("AckMessage: from ${sender.name}.");
+                break;
             case ErrorMessage():
                 logError("ErrorMessage: from ${sender.name}.");
+                break;
         }
     }
     
+    void sendTextMessage(TextMessage msg) => _forwardMessage(msg);
+
     void _handleTextMessage(DeviceInfo sender, TextMessage msg) {
         if (msg.destination == localDeviceName) {
             onSendMessage(
                 sender.id, 
                 AckMessage(destination: sender.name, messageId: msg.id)
             );
+
+            if (onLocalReceivedTextMessage != null) onLocalReceivedTextMessage!(sender.name, msg);
 
             return;
         }
@@ -152,76 +178,100 @@ class RoutingManager {
     }
     
     void _forwardMessage(Message msg) {
-        for (DeviceRoutingTable table in directConnections) {
-            if (table.info.name == msg.destination) {
-                onSendMessage(table.info.id, msg);
-                return;
-            }
-
-            for (NodeInfo tableEntry in table.nodes) {
-                if (tableEntry.deviceName == msg.destination) {
+        for (int i = 0; i < directConnections.len(); i++) {
+            directConnections.atValue(i, (table) {
+                if (table.info.name == msg.destination) {
                     onSendMessage(table.info.id, msg);
                     return;
                 }
-            }
+
+                for (NodeInfo tableEntry in table.nodes) {
+                    if (tableEntry.deviceName == msg.destination) {
+                        onSendMessage(table.info.id, msg);
+                        return;
+                    }
+                }
+            });
         }
     }
 
     void _updateRoutingTableIncoming(DeviceInfo sender, List<NodeInfo> incomingTable) {
-        // Removing ineficient.
-        final List<int> toRemoveIncoming = [];
-        int? tableIndex;
-        for (int i = 0; i < incomingTable.length; i++) {
-            // Updating hop count.
-            incomingTable[i].cost += 1;
+        // Defensive copy so we can mutate safely
+        final incoming = List<NodeInfo>.from(incomingTable);
 
-            for (DeviceRoutingTable table in directConnections) {
-                // The same table we're updating later.
-                if (table.info == sender) {
-                    // For use later.
-                    tableIndex = i;
-                    continue;
-                };
-                
-                // This means that one of the incoming table node is a direct connection.
-                // Or we are in the table.
-                if (incomingTable[i] == table.info.name || incomingTable[i].deviceName == localDeviceName) {
-                    toRemoveIncoming.add(i);
+        // collect indices to remove from incoming (we'll remove in descending order)
+        final List<int> toRemoveIncoming = [];
+
+        int? tableIndex;
+        bool addCost = true;
+
+        for (int i = 0; i < directConnections.len(); i++) {
+            final table = directConnections.atRef(i);
+
+            if (table.info.id == sender.id) {
+                tableIndex = i;
+                continue; // don't compare against the table that sent the update
+            }
+
+            for (int j = 0; j < incoming.length; j++) {
+                final incomingNode = incoming[j];
+
+                if (addCost) incomingNode.cost++;
+
+                // If incoming node is actually a direct neighbor (by name) or is ourselves, skip it
+                if (incomingNode.deviceName == table.info.name || incomingNode.deviceName == localDeviceName) {
+                    toRemoveIncoming.add(j);
                     continue;
                 }
 
+                // Compare incoming entries with existing table nodes
                 final List<int> toRemoveInternal = [];
-                for (int j = 0; j < table.nodes.length; j++) {
-                    if (incomingTable[i].deviceName == table.nodes[j].deviceName) {
-                        // Incoming is worse than others.
-                        if (incomingTable[i].cost > table.nodes[j].cost) {
-                            toRemoveIncoming.add(i);
+                for (int k = 0; k < table.nodes.length; k++) {
+                    final existingNode = table.nodes[k];
+                    if (incomingNode.deviceName == existingNode.deviceName) {
+                        // If incoming is worse (higher cost) we drop the incoming entry,
+                        // otherwise we prefer incoming and remove the old entry
+                        if (incomingNode.cost > existingNode.cost) {
+                            toRemoveIncoming.add(j);
                         } else {
-                            toRemoveInternal.add(j);
+                            toRemoveInternal.add(k);
                         }
                     }
                 }
-                
-                // Removing this one's.
-                for (int toRemove in toRemoveInternal) {
-                    table.nodes.removeAt(toRemove);
+
+                // Remove internal entries (descending)
+                toRemoveInternal.sort((a, b) => b.compareTo(a));
+                for (final rem in toRemoveInternal) {
+                    if (rem >= 0 && rem < table.nodes.length) {
+                        table.nodes.removeAt(rem);
+                    }
                 }
             }
-        }
-        
-        // Removing incoming.
-        for (int toRemove in toRemoveIncoming) {
-            incomingTable.removeAt(toRemove);
+
+            addCost = false; // only first table increments cost once
         }
 
-        // Swapping.
-        directConnections[tableIndex!].nodes = incomingTable;
+        // Remove incoming indices in descending order to avoid shifting indices
+        toRemoveIncoming.sort((a, b) => b.compareTo(a));
+        for (final rem in toRemoveIncoming) {
+            if (rem >= 0 && rem < incoming.length) {
+                incoming.removeAt(rem);
+            }
+        }
+
+        // Now swap into the sender's table (if we found it)
+        if (tableIndex != null) {
+            directConnections.atValue(tableIndex, (table) => table.nodes = incoming);
+        } else {
+            logError("Was not able to update table from ${sender.name}.");
+        }
     }
 
     List<NodeInfo> _prepareRoutingTableToSend(DeviceInfo destination) {
         final List<NodeInfo> result = [];
         
-        for (DeviceRoutingTable direct in directConnections) {
+        for (int i = 0; i < directConnections.len(); i++) {
+            final direct = directConnections.atRef(i);
             if (direct.info == destination) continue;
             
             result.addAll(direct.nodes);
@@ -250,18 +300,21 @@ class NetworkManager {
         await startAdvertising();
         await startDiscovery();
         isRunning.value = true;
+        routingManager.running = true;
     }
     
     Future<void> stop() async {
         tryLogAsync(DebugMessageType.error, () async {
             await nearby.stopAdvertising();
-            await nearby.stopAllEndpoints();
             await nearby.stopDiscovery();
+            await nearby.stopAllEndpoints();
 
             DebugConsole.log(DebugMessageType.info, 'Stopped advertising and discovery');
         });
 
         isRunning.value = false;
+        routingManager.running = false;
+        routingManager.clearConnections();
     }
 
     Future<void> startAdvertising() async {
@@ -303,10 +356,12 @@ class NetworkManager {
     }
 
     void onEndpointFound(String id, String name, String serviceId) {
+        if (name == localDeviceName) return;
+
         DebugConsole.log(DebugMessageType.info, 'Endpoint found: $name ($id)');
         tryLogAsync(DebugMessageType.error, () async {
             if (routingManager.isConnectedTo(id)) {
-                DebugConsole.log(DebugMessageType.info, 'Already connected to $name ($id)');
+                DebugConsole.log(DebugMessageType.warn, 'Already connected to $name ($id)');
                 return;
             }
 
@@ -321,8 +376,6 @@ class NetworkManager {
     }
     
     void onConnectionInitiated(String id, ConnectionInfo info) {
-        DebugConsole.log(DebugMessageType.info, 'Connection initiated from ${info.endpointName} ($id).');
-
         tryLogAsync(DebugMessageType.error, () async {
             if (routingManager.isConnectedTo(id)) return;
             
@@ -338,7 +391,7 @@ class NetworkManager {
     void onConnectionResult(String id, Status status) {
         DebugConsole.log(DebugMessageType.info, 'Connection result from $id: $status');
 
-        tryLog(DebugMessageType.error, () {
+        tryLogAsync(DebugMessageType.error, () async {
             switch (status) {
                 case Status.CONNECTED:
                     routingManager.addConnection(id);
@@ -350,21 +403,15 @@ class NetworkManager {
     }
 
     void onDisconnected(String id) {
-        DeviceInfo info = routingManager.removeConnection(id) ?? DeviceInfo(
-            id: id, 
-            name: "Unknown Device"
-        );
-        DebugConsole.log(DebugMessageType.info, 'Disconnected from ${info.name} ($id)');
+        routingManager.unstageConnection(id);
+        routingManager.removeConnection(id);
     }
 
     void onEndpointLost(String? id) {
         if (id == null) return;
 
-        DeviceInfo info = routingManager.unstageConnection(id) ?? DeviceInfo(
-            id: id, 
-            name: "Unknown Device"
-        );
-        DebugConsole.log(DebugMessageType.info, 'Endpoint lost: ${info.name} ($id)');
+        routingManager.unstageConnection(id);
+        routingManager.removeConnection(id);
     }
 
     void onPayLoadRecieved(String id, Payload payload) {
@@ -372,7 +419,7 @@ class NetworkManager {
             case PayloadType.BYTES:
                 tryLog(DebugMessageType.error, () {
                     final jsonString = utf8.decode(payload.bytes!);
-                    final data = jsonDecode(jsonString);
+                    final Map<String, dynamic> data = jsonDecode(jsonString);
 
                     // This is ugly.
                     Message? message =
@@ -381,7 +428,12 @@ class NetworkManager {
                         ?? AckMessage.fromJson(data)
                         ?? ErrorMessage.fromJson(data);
                     
-                    routingManager.onMessageReceived(id, message!);
+                    if (message == null) {
+                        logWarn("Unknown message format from $id: $data");
+                        return;
+                    }
+
+                    routingManager.onMessageReceived(id, message);
                 });
                 break;
             default: break;

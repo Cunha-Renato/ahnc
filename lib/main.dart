@@ -47,6 +47,9 @@ class HomePage extends StatefulWidget {
 }
 
 class HomePageState extends State<HomePage> {
+    final debugPanel = DebugConsole();
+    bool showDebug = false;
+
     @override
     Widget build(BuildContext context) {
         return Scaffold(
@@ -54,20 +57,23 @@ class HomePageState extends State<HomePage> {
                 title: Text(widget.title),
                 backgroundColor: Theme.of(context).colorScheme.inversePrimary,
             ),
-            body: Center(
-                child: Column(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                        HandlePermissions(),
-                        ElevatedButton(
-                            onPressed: () {
-                                Navigator.pushNamed(context, Routes.connections);
-                            },
-                            child: const Text('Connections'), 
-                        ),
-                        DebugConsole()
-                    ],
-                )
+            body: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                    HandlePermissions(),
+                    Expanded(
+                        child: ConnectionsPage(),
+                    ),
+                    TextButton(
+                        onPressed: () => setState(() {
+                            showDebug = !showDebug;
+                        }), 
+                        child: Text("D")
+                    ),
+                    showDebug
+                    ? debugPanel
+                    : SizedBox.shrink()
+                ],
             ),
         );
     }

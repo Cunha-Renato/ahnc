@@ -15,13 +15,6 @@ sealed class Message {
     
     Map<String, dynamic> toJson();
     static Message? fromJson(Map<String, dynamic> json) => null;
-    static bool isValidJson(Map<String, dynamic> json) {
-        try {
-            return json[jsonMessageId] is! String && json[jsonMessageDestination] is! String;
-        } catch(_) {
-            return false;
-        }
-    }
 }
 
 class TextMessage extends Message {
@@ -40,18 +33,12 @@ class TextMessage extends Message {
     
     static TextMessage? fromJson(Map<String, dynamic> json) {
         try {
-            if (
-                !Message.isValidJson(json)
-                || json[jsonMessageType]! != 'Text'
-                || !(json[jsonMessageContents] is! String)
-            ) {
-                return null;
-            }
+            if (json[jsonMessageType]! as String != 'Text') return null;
             
             return TextMessage.withId(
-                json[jsonMessageId]!,
-                destination: json[jsonMessageDestination]!,
-                text: json[jsonMessageContents]!
+                json[jsonMessageId]! as String,
+                destination: json[jsonMessageDestination]! as String,
+                text: json[jsonMessageContents]! as String
             );
         } catch(_) {
             return null;
@@ -75,18 +62,12 @@ class RouteUpdateMessage extends Message {
     
     static RouteUpdateMessage? fromJson(Map<String, dynamic> json) {
         try {
-            if (
-                !Message.isValidJson(json)
-                || json[jsonMessageType]! != 'RouteUpdate'
-                || !(json[jsonMessageContents] is! List<NodeInfo>)
-            ) {
-                return null;
-            }
-            
+            if (json[jsonMessageType]! as String != 'RouteUpdate') return null;
+
             return RouteUpdateMessage.withId(
-                json[jsonMessageId]!,
-                destination: json[jsonMessageDestination]!,
-                nodes: json[jsonMessageContents]!
+                json[jsonMessageId]! as String,
+                destination: json[jsonMessageDestination]! as String,
+                nodes: List<NodeInfo>.from(json[jsonMessageContents]!),
             );
         } catch(_) {
             return null;
@@ -110,18 +91,12 @@ class AckMessage extends Message {
 
     static AckMessage? fromJson(Map<String, dynamic> json) {
         try {
-            if (
-                !Message.isValidJson(json)
-                || json[jsonMessageType]! != 'Ack'
-                || !(json[jsonMessageContents] is! String)
-            ) {
-                return null;
-            }
-            
+            if (json[jsonMessageType]! as String != 'Ack') return null;
+
             return AckMessage.withId(
-                json[jsonMessageId]!,
-                destination: json[jsonMessageDestination]!,
-                messageId: json[jsonMessageContents]!
+                json[jsonMessageId]! as String,
+                destination: json[jsonMessageDestination]! as String,
+                messageId: json[jsonMessageContents]! as String
             );
         } catch(_) {
             return null;
@@ -155,19 +130,15 @@ class ErrorMessage extends Message {
 
     static ErrorMessage? fromJson(Map<String, dynamic> json) {
         try {
-            if (
-                !Message.isValidJson(json)
-                || json[jsonMessageType]! != 'Text'
-                || !(json[jsonMessageContents] is! List<String>)
-            ) {
-                return null;
-            }
+            if (json[jsonMessageType]! != 'Text') return null;
             
+            final contents = List<String>.from(json[jsonMessageContents]!);
+
             return ErrorMessage.withId(
-                json[jsonMessageId]!,
-                destination: json[jsonMessageDestination]!,
-                messageId: json[jsonMessageContents]![0],
-                error: json[jsonMessageContents]![1],
+                json[jsonMessageId]! as String,
+                destination: json[jsonMessageDestination]! as String,
+                messageId: contents[0],
+                error: contents[1],
             );
         } catch(_) {
             return null;
