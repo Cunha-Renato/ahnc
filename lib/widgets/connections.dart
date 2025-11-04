@@ -1,173 +1,95 @@
 import 'package:ahnc/message.dart';
-import 'package:ahnc/network_manager.dart';
+import 'package:ahnc/nearby_manager.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
-class ConnectionsPage extends StatefulWidget {
-    const ConnectionsPage({super.key});
-
+class Connections extends StatefulWidget {
+    const Connections({super.key});
+    
     @override
-    State<ConnectionsPage> createState() => _ConnectionsPageState();
+    State<StatefulWidget> createState() => _ConnectionsState();
 }
 
-class _ConnectionsPageState extends State<ConnectionsPage> {
-    final Map<String, List<TextMessage>> messages = {};
-    String? currentChat = null;
-
-    @override
-    void initState() {
-        super.initState();
-        
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (SNetworkManager().networkManager == null) {
-                _showPrompt();
-            }
-        });
-    }
-
+class _ConnectionsState extends State<Connections> {
+    final Map<DeviceUuid, List<TextMessage>> messages = {};
+    bool isPaused = true;
+    DeviceUuid? currentChat = null;
+    
     @override
     Widget build(BuildContext context) {
-        final networkManager = SNetworkManager().networkManager;
+        final nearby = context.watch<NearbyManager>();
 
-        return Padding(
-            padding: const EdgeInsets.all(5.0),
-            child: networkManager == null
-            ? TextButton(
-                onPressed: _showPrompt,
-                child: const Text('Set Info'),
-            )
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+        return  Padding(
+            padding: const EdgeInsets.all(4.0),
+            child: Column(
+                mainAxisAlignment: MainAxisAlignment.start,
+                // crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                    // LEFT COLUMN
                     Row(
                         children: [
-                            // Header
-                            TextButton(
-                                onPressed: () {
-                                showDialog(
-                                    context: context,
-                                    builder: (BuildContext context) {
-                                        return AlertDialog(
-                                            title: const Text('Info'),
-                                            content: SingleChildScrollView(
-                                                child: ListBody(
-                                                    children: [
-                                                        Text("Name: ${networkManager.localDeviceName}"),
-                                                        Text("Service ID: ${networkManager.serviceId}"),
-                                                    ]),
-                                                ),
-                                            actions: [ TextButton(
-                                                child: const Text('Ok'),
-                                                onPressed: () {
-                                                    Navigator.of(context).pop();
-                                                },
-                                            )],
-                                        );
-                                    });
-                                }, 
-                                child: Text(
-                                    "Info",
-                                    style: TextStyle(fontWeight: FontWeight.bold),
-                                )
-                            ),
-
-                            // Start/Stop Button
-                            ValueListenableBuilder(
-                                valueListenable: networkManager.isRunning,
-                                builder: (context, isRunning, _) {
-                                    return TextButton(
-                                        onPressed: () async {
-                                            isRunning
-                                            ? await networkManager.stop()
-                                            : await networkManager.start();
-                                        },
-                                        child: isRunning
-                                            ? const Text('Stop')
-                                            : const Text('Start'),
-                                    );
-                                },
-                            ),
-                        ]
-                    ),
-
-                    // Main content
-                    Expanded(
-                        child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                                // Connections Column
-                                Expanded(
-                                    flex: 2,
-                                    child: Builder(builder: (context) {
-                                        final controller = TextEditingController();
-
-                                        return SingleChildScrollView(child: Column(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                                // Connections List
-                                                ValueListenableBuilder(
-                                                    valueListenable: networkManager.routingManager.directConnections,
-                                                    builder: (context, directTables, _) {
-                                                        final directWidgets = [];
-                                                        final indirectWidgets = [];
-
-                                                        for (var table in directTables) {
-                                                            directWidgets.add(TextButton(
-                                                                onPressed: () {
-                                                                    setState(() {
-                                                                        currentChat = table.info.name;
-                                                                    });
-                                                                },
-                                                                child: Text("${table.info.name} -- ${table.info.id}"),
-                                                            ));
-
-                                                            for (var node in table.nodes) {
-                                                                indirectWidgets.add(TextButton(
-                                                                    onPressed: () {
-                                                                        setState(() {
-                                                                            currentChat = node.deviceName;
-                                                                        });
-                                                                    },
-                                                                    child: Text("${table.info.name}: ${node.deviceName} > ${node.cost}"),
-                                                                ));
-                                                            }
-                                                        }
-
-                                                        return Column(
-                                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                                            children: [
-                                                                const Text("Direct Connections", style: TextStyle(fontWeight: FontWeight.bold)),
-                                                                ...directWidgets,
-                                                                const SizedBox(height: 8),
-                                                                const Text("Indirect Connections", style: TextStyle(fontWeight: FontWeight.bold)),
-                                                                ...indirectWidgets,
-                                                            ],
-                                                        );
-                                                    },
-                                                ),
-                                            ],
-                                        ));
-                                    })
-                                ),
-
-                                const SizedBox(width: 8),
-
-                                // Chat Column
-                                if (currentChat != null) Expanded(
-                                    flex: 3,
-                                    child: ChatColumn(
-                                        networkManager: networkManager,
-                                        chatMessages: messages[currentChat] ?? [],
-                                        onSend: (text) {
-                                            final message = TextMessage(destination: currentChat!, text: text);
-                                            networkManager.routingManager.sendTextMessage(message);
-
-                                            setState(() {
-                                                messages.putIfAbsent(currentChat!, () => []).add(message);
-                                            });
-                                        },
+                            SizedBox(
+                                width: 100,
+                                height: 40,
+                                child: ElevatedButton(
+                                    style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.blueGrey.shade700,
+                                        foregroundColor: Colors.white,
+                                        shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(6),
+                                        ),
+                                    ),
+                                    onPressed: () async {
+                                        await _showConfiguration(nearby);
+                                    },
+                                    child: const Text(
+                                        "Device",
+                                        style: TextStyle(
+                                            fontSize: 15.0,
+                                            fontWeight: FontWeight.bold,
+                                        ),
                                     ),
                                 ),
-                            ],
+                            ),
+
+                            const Spacer(),
+
+                            _iconAction(
+                                Icons.refresh, 
+                                () {
+                                    if (!isPaused) nearby.restartDiscovery();
+                                }
+                            ),
+                            _iconAction(
+                                isPaused
+                                ? Icons.play_arrow_rounded
+                                : Icons.pause,
+                                () async {
+                                    setState(() {
+                                        if (isPaused) {
+                                            nearby.startDiscovery();
+                                        } else {
+                                            nearby.stopDiscovery();
+                                        }
+                                        
+                                        isPaused = !isPaused;
+                                    });
+                                }
+                            ),
+                        ],
+                    ),
+                    Expanded(
+                        child: currentChat == null
+                        ? _DeviceList(
+                            onTap: (uuid) => setState(() => currentChat = uuid),
+                        )
+                        : PopScope(
+                            canPop: false,
+                            onPopInvokedWithResult: (didPop, result) {
+                                if (!didPop && currentChat != null) 
+                                    setState(() => currentChat = null);
+                            },
+                            child: _ChatList(currentChat!)
                         ),
                     ),
                 ],
@@ -175,29 +97,40 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
         );
     }
 
+    Widget _iconAction(IconData icon, VoidCallback onTap) {
+        return InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(4),
+            child: Padding(
+                padding: const EdgeInsets.all(2),
+                child: Icon(icon, size: 32, color: Colors.black87),
+            ),
+        );
+    }
 
-    Future<void> _showPrompt() async {
+    Future<void> _showConfiguration(NearbyManager nearby) async {
         final nameController = TextEditingController();
         final networkIdController = TextEditingController();
-
+        
         final result = await showDialog<List<String>>(
             context: context, 
             builder: (context) {
                 return StatefulBuilder(
                     builder: (context, setState) {
                         return AlertDialog(
-                            title: const Text('Enter Info'),
+                            title: const Text('Device Info'),
                             content: Column(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
+                                    Text("Uuid:\n${nearby.localUuid}"),
                                     TextField(
                                         controller: nameController,
-                                        decoration: const InputDecoration(hintText: 'Connection Name'),
+                                        decoration: InputDecoration(hintText: 'Device Name: (${nearby.localEndpointName})'),
                                         onChanged: (_) => setState(() {}),
                                     ),
                                     TextField(
                                         controller: networkIdController,
-                                        decoration: InputDecoration(hintText: 'Network ID: (optional)'),
+                                        decoration: InputDecoration(hintText: 'Network ID: (${nearby.serviceId})'),
                                         onChanged: (_) => setState(() {}),
                                     )
                                 ],
@@ -207,7 +140,7 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                                     onPressed: () => Navigator.pop(context),
                                     child: const Text('Cancel'),
                                 ),
-                                if (nameController.text.isNotEmpty)
+                                if (nameController.text.isNotEmpty || nearby.localEndpointName != null)
                                     TextButton(
                                         onPressed: () => Navigator.of(context).pop([nameController.text, networkIdController.text]),
                                         child: const Text('OK'),
@@ -218,48 +151,88 @@ class _ConnectionsPageState extends State<ConnectionsPage> {
                 );
             },
         );
-        
+    
         if (result != null && result.isNotEmpty) {
             setState(() {
-                if (result.length > 1 && result[1].isNotEmpty) {
-                    SNetworkManager().init(
-                        localDeviceName: result[0], 
-                        serviceId: result[1]
-                    );
-                } else {
-                    SNetworkManager().init(
-                        localDeviceName: result[0], 
-                    );
+                final localEndpointName = result[0].isNotEmpty
+                    ? result[0]
+                    : nearby.localEndpointName;
+
+                final serviceId = result.length > 1 && result[1].isNotEmpty
+                    ? result[1]
+                    : nearby.serviceId;
+                
+                final changedNetwork = serviceId != nearby.serviceId;
+
+                if (
+                    changedNetwork
+                    || (
+                        localEndpointName != null
+                        && localEndpointName != nearby.localEndpointName
+                    )
+                ) {
+                    nearby.configure(localEndpointName!, serviceId);
                 }
-            
-                SNetworkManager().networkManager!.routingManager.onLocalReceivedTextMessage = (String sender, TextMessage msg) {
-                    setState(() {
-                        messages.putIfAbsent(sender, () => []).add(msg);
-                    });
-                };
+
+                // If true then all connected / discovered devices are now outside the network.
+                if (changedNetwork) {
+                    nearby.restartAdvertising();
+
+                    if (!isPaused) nearby.restartDiscovery();
+
+                    nearby.disconnectAll();
+                }
             });
         }
     }
 }
 
-// Extracted ChatColumn for clarity
-class ChatColumn extends StatefulWidget {
-    final NetworkManager networkManager;
-    final List<TextMessage> chatMessages;
-    final void Function(String) onSend;
-
-    const ChatColumn({
-        required this.networkManager,
-        required this.chatMessages,
-        required this.onSend,
-        super.key,
-    });
+class _DeviceList extends StatelessWidget {
+    final onTap;
+    
+    _DeviceList({required void Function(DeviceUuid) this.onTap});
 
     @override
-    State<ChatColumn> createState() => _ChatColumnState();
+    Widget build(BuildContext context) {
+        final nearby = NearbyManager();
+        final devices = nearby.devices;
+
+        return ListView.builder(
+            itemCount: devices.length,
+            itemBuilder: (context, index) {
+                final device = devices[index];
+                return ListTile(
+                    title: Text("${device.name ?? device.uuid.toString()} (${device.connectionId})"),
+                    subtitle: Text(device.status.name),
+                    trailing: _statusIcon(device.status),
+                    onTap: () => onTap(device.uuid),
+                );
+            },
+        );
+    }
+
+    Widget _statusIcon(DeviceStatus status) {
+        switch (status) {
+            case DeviceStatus.discovered:
+                return const Icon(Icons.wifi_find, color: Colors.grey);
+            case DeviceStatus.connecting:
+                return const Icon(Icons.sync, color: Colors.orange);
+            case DeviceStatus.connected:
+                return const Icon(Icons.check_circle, color: Colors.green);
+        }
+    }
 }
 
-class _ChatColumnState extends State<ChatColumn> {
+class _ChatList extends StatefulWidget {
+    final DeviceUuid currentChat;
+
+    _ChatList(DeviceUuid this.currentChat);
+
+    @override
+    State<_ChatList> createState() => _ChatListState();
+}
+
+class _ChatListState extends State<_ChatList> {
     final TextEditingController _controller = TextEditingController();
     final ScrollController _scrollController = ScrollController();
 
@@ -276,13 +249,16 @@ class _ChatColumnState extends State<ChatColumn> {
     }
 
     @override
-    void didUpdateWidget(covariant ChatColumn oldWidget) {
+    void didUpdateWidget(covariant _ChatList oldWidget) {
         super.didUpdateWidget(oldWidget);
         _scrollToEnd();
     }
 
     @override
     Widget build(BuildContext context) {
+        final nearby = context.watch<NearbyManager>();
+        final chatMessages = nearby.getTextMessages(widget.currentChat);
+
         return Column(
             children: [
                 // Messages
@@ -291,10 +267,10 @@ class _ChatColumnState extends State<ChatColumn> {
                         padding: const EdgeInsets.all(5.0),
                         child: ListView.builder(
                             controller: _scrollController,
-                            itemCount: widget.chatMessages.length,
+                            itemCount: chatMessages.length,
                             itemBuilder: (context, index) {
-                                final msg = widget.chatMessages[index];
-                                final isLocal = msg.destination != widget.networkManager.localDeviceName;
+                                final msg = chatMessages[index];
+                                final isLocal = msg.destination != NearbyManager().localUuid;
 
                                 return Align(
                                     alignment: isLocal
@@ -313,7 +289,7 @@ class _ChatColumnState extends State<ChatColumn> {
                                                 : CrossAxisAlignment.start,
                                             children: [
                                                 Text(
-                                                    isLocal ? "You" : msg.destination,
+                                                    isLocal ? "You" : "CHANGE TO CURRENT CHAT",
                                                     style: const TextStyle(
                                                         fontWeight: FontWeight.bold,
                                                         color: Colors.white,
@@ -334,7 +310,6 @@ class _ChatColumnState extends State<ChatColumn> {
                     ),
                 ),
 
-                // Input row
                 Row(
                     children: [
                         Expanded(
@@ -348,10 +323,18 @@ class _ChatColumnState extends State<ChatColumn> {
                             ),
                         ),
                         TextButton(
-                            onPressed: () {
+                            onPressed: () async {
                                 if (_controller.text.isEmpty) return;
-                                widget.onSend(_controller.text);
-                                _controller.clear();
+
+                                final message = TextMessage(
+                                    destination: widget.currentChat,
+                                    text: _controller.text
+                                );
+                                await NearbyManager().routingManager.sendTextMessageNearby(message);
+                                setState(() {
+                                    _controller.clear();
+                                });
+
                                 _scrollToEnd();
                             },
                             child: const Text("Send"),

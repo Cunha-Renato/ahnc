@@ -1,4 +1,4 @@
-import 'package:ahnc/network_manager.dart';
+import 'package:ahnc/nearby_manager.dart';
 import 'package:uuid/uuid.dart';
 
 const jsonMessageType = 'messageType';
@@ -8,7 +8,7 @@ const jsonMessageContents = 'contents';
 
 sealed class Message {
     String id = Uuid().v4();
-    final String destination;
+    final DeviceUuid destination;
 
     Message({required this.destination});
     Message.withId({required this.id, required this.destination});
@@ -27,7 +27,7 @@ class TextMessage extends Message {
     Map<String, dynamic> toJson() => {
         jsonMessageType: 'Text',
         jsonMessageId: id,
-        jsonMessageDestination: destination,
+        jsonMessageDestination: destination.toString(),
         jsonMessageContents: text,
     };
     
@@ -37,7 +37,7 @@ class TextMessage extends Message {
             
             return TextMessage.withId(
                 json[jsonMessageId]! as String,
-                destination: json[jsonMessageDestination]! as String,
+                destination: DeviceUuid.fromString(json[jsonMessageDestination]! as String),
                 text: json[jsonMessageContents]! as String
             );
         } catch(_) {
@@ -46,8 +46,37 @@ class TextMessage extends Message {
     }
 }
 
+class NameUpdateMessage extends Message {
+    final String newName;
+
+    NameUpdateMessage({required super.destination, required this.newName});
+    NameUpdateMessage.withId(String id, {required super.destination, required this.newName}): super.withId(id: id);
+    
+    @override
+    Map<String, dynamic> toJson() => {
+        jsonMessageType: 'NameUpdate',
+        jsonMessageId: id,
+        jsonMessageDestination: destination.toString(),
+        jsonMessageContents: newName,
+    };
+    
+    static NameUpdateMessage? fromJson(Map<String, dynamic> json) {
+        try {
+            if (json[jsonMessageType]! as String != 'NameUpdate') return null;
+            
+            return NameUpdateMessage.withId(
+                json[jsonMessageId]! as String,
+                destination: DeviceUuid.fromString(json[jsonMessageDestination]! as String),
+                newName: json[jsonMessageContents]! as String
+            );
+        } catch(_) {
+            return null;
+        }
+    }
+}
+
 class RouteUpdateMessage extends Message {
-    final List<NodeInfo> nodes;
+    final List<FarawayDevice> nodes;
 
     RouteUpdateMessage({required super.destination, required this.nodes});
     RouteUpdateMessage.withId(String id, {required super.destination, required this.nodes}): super.withId(id: id);
@@ -56,7 +85,7 @@ class RouteUpdateMessage extends Message {
     Map<String, dynamic> toJson() => {
         jsonMessageType: 'RouteUpdate',
         jsonMessageId: id,
-        jsonMessageDestination: destination,
+        jsonMessageDestination: destination.toString(),
         jsonMessageContents: nodes,
     };
     
@@ -66,8 +95,8 @@ class RouteUpdateMessage extends Message {
 
             return RouteUpdateMessage.withId(
                 json[jsonMessageId]! as String,
-                destination: json[jsonMessageDestination]! as String,
-                nodes: List<NodeInfo>.from(json[jsonMessageContents]!),
+                destination: DeviceUuid.fromString(json[jsonMessageDestination]! as String),
+                nodes: List<FarawayDevice>.from(json[jsonMessageContents]!),
             );
         } catch(_) {
             return null;
@@ -85,7 +114,7 @@ class AckMessage extends Message {
     Map<String, dynamic> toJson() => {
         jsonMessageType: 'Ack',
         jsonMessageId: id,
-        jsonMessageDestination: destination,
+        jsonMessageDestination: destination.toString(),
         jsonMessageContents: messageId,
     };
 
@@ -95,7 +124,7 @@ class AckMessage extends Message {
 
             return AckMessage.withId(
                 json[jsonMessageId]! as String,
-                destination: json[jsonMessageDestination]! as String,
+                destination: DeviceUuid.fromString(json[jsonMessageDestination]! as String),
                 messageId: json[jsonMessageContents]! as String
             );
         } catch(_) {
@@ -124,7 +153,7 @@ class ErrorMessage extends Message {
     Map<String, dynamic> toJson() => {
         jsonMessageType: 'Error',
         jsonMessageId: id,
-        jsonMessageDestination: destination,
+        jsonMessageDestination: destination.toString(),
         jsonMessageContents: [messageId, error],
     };
 
@@ -136,7 +165,7 @@ class ErrorMessage extends Message {
 
             return ErrorMessage.withId(
                 json[jsonMessageId]! as String,
-                destination: json[jsonMessageDestination]! as String,
+                destination: DeviceUuid.fromString(json[jsonMessageDestination]! as String),
                 messageId: contents[0],
                 error: contents[1],
             );

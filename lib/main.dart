@@ -1,11 +1,9 @@
+import 'package:ahnc/nearby_manager.dart';
 import 'package:ahnc/widgets/connections.dart';
 import 'package:ahnc/widgets/debug_console.dart';
 import 'package:ahnc/widgets/permission.dart';
 import 'package:flutter/material.dart';
-
-class Routes {
-    static const String connections = '/connections';
-}
+import 'package:provider/provider.dart';
 
 void main() {
     runApp(const App());
@@ -14,8 +12,6 @@ void main() {
 class App extends StatefulWidget {
     const App({super.key});
     
-    final ConnectionsPage connectionManagerPage = const ConnectionsPage();
-
     @override
     State<App> createState() => AppState();
 }
@@ -30,9 +26,6 @@ class AppState extends State<App> {
                 colorScheme: ColorScheme.fromSeed(seedColor: Colors.orangeAccent),
             ),
             home: const HomePage(title: 'Ahnc'),
-            routes: Map.of({
-                Routes.connections: (context) => super.widget.connectionManagerPage,
-            }),
         );
     }
 }
@@ -61,9 +54,13 @@ class HomePageState extends State<HomePage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                     HandlePermissions(),
-                    Expanded(
-                        child: ConnectionsPage(),
-                    ),
+                    // Expanded(
+                    //     child: ConnectionsPage(),
+                    // ),
+                    Expanded(child: ChangeNotifierProvider(
+                        create: (_) => NearbyManager(),
+                        child: Connections(),
+                    )),
                     TextButton(
                         onPressed: () => setState(() {
                             showDebug = !showDebug;

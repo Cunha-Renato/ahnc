@@ -1,0 +1,521 @@
+import 'dart:convert';
+
+import 'package:ahnc/message.dart';
+import 'package:ahnc/widgets/debug_console.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:nearby_connections/nearby_connections.dart';
+import 'package:synchronized/synchronized.dart';
+import 'package:uuid/uuid.dart';
+
+class DeviceUuid {
+    final String uuid;
+
+    DeviceUuid(): uuid = Uuid().v4();
+
+    DeviceUuid.fromString(this.uuid);
+    
+    @override
+    String toString() => uuid;
+    
+    @override
+    bool operator ==(Object other) =>
+        identical(this, other) 
+        || other is DeviceUuid 
+        && runtimeType == other.runtimeType 
+        && uuid == other.uuid;
+
+    @override
+    int get hashCode => uuid.hashCode;
+}
+
+enum DeviceStatus { 
+    connected,
+    connecting, 
+    discovered, 
+}
+int _statusToNumber(DeviceStatus status) {
+    switch (status) {
+        case DeviceStatus.connected: return 0;
+        case DeviceStatus.connecting: return 1;
+        case DeviceStatus.discovered: return 2;
+    }
+}
+
+class NearbyDevice {
+    final DeviceUuid uuid;
+    String? name;
+    String connectionId;
+    DeviceStatus status;
+    List<FarawayDevice> table = [];
+
+    NearbyDevice({
+        required this.uuid,
+        required this.connectionId,
+        required this.status
+    });
+
+    @override
+    String toString() {
+        return 'NearbyDevice {\n'
+            '    uuid: "${uuid}",\n'
+            '    name: "${name}",\n'
+            '    connection_id: "${connectionId}",\n'
+            '    status: ${status.name},\n'
+           '}';
+    }
+}
+
+class FarawayDevice {
+    final DeviceUuid uuid;
+    final String deviceName;
+    int cost;
+    
+    FarawayDevice(this.uuid, this.deviceName, this.cost);
+}
+
+class NearbyManager extends ChangeNotifier {
+    static final NearbyManager _instance = NearbyManager._internal();
+    static final _routingManager = RoutingManager();
+    static final _localUuid = DeviceUuid();
+    static const _strategy = Strategy.P2P_CLUSTER;
+
+    factory NearbyManager() => _instance;
+    NearbyManager._internal() {
+        _startAdvertising();
+    }
+    
+    final Map<DeviceUuid, NearbyDevice> _devices = {};
+    final Map<DeviceUuid, List<TextMessage>> _textMessages = {};
+    final _lock = Lock();
+    String? _localEndpointName;
+    String _serviceId = 'com.ahnc';
+    
+    List<NearbyDevice> get devices {
+        final result = _devices.values.toList();
+        
+        result.sort((a, b) => _statusToNumber(a.status).compareTo(_statusToNumber(b.status)));
+        return result;
+    } 
+    RoutingManager get routingManager => _routingManager;
+    String? get localEndpointName => _localEndpointName;
+    String get serviceId => _serviceId;
+    DeviceUuid get localUuid => _localUuid;
+
+    List<TextMessage> getTextMessages(DeviceUuid uuid) {
+        return (_textMessages[uuid] ?? []).toList();
+    } 
+    
+    Future<void> configure(String endpointName, String? serviceId) async {
+        final shouldBroadcast = _localEndpointName != endpointName;
+        _localEndpointName = endpointName;
+
+        if (serviceId != null && serviceId != _serviceId) {
+            _serviceId = serviceId;
+            return;
+        }
+
+        if (shouldBroadcast) {
+            for (NearbyDevice device in _devices.values) {
+                if (device.status == DeviceStatus.connected) {
+                    await _onSendMessage(
+                        device,
+                        NameUpdateMessage(destination: device.uuid, newName: endpointName)
+                    );
+                }
+            }
+        }
+    }
+
+    Future<void> _startAdvertising() async {
+        await tryLogAsync(DebugMessageType.error, () async {
+            await Nearby().startAdvertising(
+                _localUuid.toString(), 
+                _strategy, 
+                onConnectionInitiated: _onConnectionInitiated, 
+                onConnectionResult: _onConnectionResult, 
+                onDisconnected: _onDisconnected,
+                serviceId: _serviceId,
+            );
+        });
+    }
+
+    Future<void> _stopAdvertising() async {
+        await tryLogAsync(DebugMessageType.error, () async {
+            await Nearby().stopAdvertising();
+        });
+    }
+    
+    Future<void> restartAdvertising() async {
+        await _stopAdvertising();
+        await _startAdvertising();
+    }
+    
+    Future<void> startDiscovery() async {
+        await tryLogAsync(DebugMessageType.error, () async {
+            await Nearby().startDiscovery(
+                _localUuid.toString(),
+                _strategy,
+                serviceId: _serviceId,
+                onEndpointFound: (id, name, serviceId) async {
+                    final endpointUuid = DeviceUuid.fromString(name);
+
+                    final device = await _lock.synchronized(() =>
+                        _devices.putIfAbsent(
+                            endpointUuid, 
+                            () => NearbyDevice(
+                                uuid: endpointUuid,
+                                connectionId: id,
+                                status: DeviceStatus.discovered
+                            )
+                        )
+                    );
+                    device.connectionId = id;
+
+                    notifyListeners();
+                    
+                    logDebug("Endpoint found: $device");
+
+                    if (device.status != DeviceStatus.discovered) {
+                        logDebug("Endpoint is alwready connected or connecting: returning from onEndpointFound.");
+                        return;
+                    }
+
+                    try {
+                        await Nearby().requestConnection(
+                            _localUuid.toString(), 
+                            id, 
+                            onConnectionInitiated: _onConnectionInitiated, 
+                            onConnectionResult: _onConnectionResult, 
+                            onDisconnected: _onDisconnected
+                        );
+                    } on PlatformException catch (pe) {
+                        if (pe.message == "8003: STATUS_ALREADY_CONNECTED_TO_ENDPOINT") device.status = DeviceStatus.connected;
+                    } catch (e) {
+                        logError(e.toString());
+                    }
+                },
+                onEndpointLost: (id) async {
+                    await _lock.synchronized(() {
+                        logDebug("Endpoint lost: $id.");
+                        _devices.removeWhere((_, value) => 
+                            value.connectionId == id
+                            && value.status == DeviceStatus.discovered
+                        );
+                    });
+                    
+                    await restartDiscovery();
+
+                    notifyListeners();
+                },
+              );
+        });
+    }
+    
+    Future<void> stopDiscovery() async {
+        await Nearby().stopDiscovery();
+    }
+    
+    Future<void> restartDiscovery() async {
+        await stopDiscovery();
+        await startDiscovery();
+    }
+
+    Future<void> disconnectAll() async {
+        await Nearby().stopAllEndpoints();
+        await _lock.synchronized(() => _devices.clear());
+        notifyListeners();
+    }
+    
+    Future<void> _onConnectionInitiated(String id, ConnectionInfo info) async {
+        await _lock.synchronized(() { 
+            final endpointUuid = DeviceUuid.fromString(info.endpointName);
+            NearbyDevice device = _devices.putIfAbsent(
+                endpointUuid,
+                () => NearbyDevice(
+                    uuid: endpointUuid,
+                    connectionId: id,
+                    status: DeviceStatus.connecting
+                )
+            );
+            
+            logDebug("Connection Initiated - preview: $device");
+            
+            device.connectionId = id;
+            if (device.status == DeviceStatus.discovered) device.status = DeviceStatus.connecting; 
+            
+            logDebug("Connection Initiated - final: $device");
+        });
+        
+        notifyListeners();
+        
+        Nearby().acceptConnection(
+            id, 
+            onPayLoadRecieved: _onPayloadReceived,
+        );
+    }
+    
+    void _onPayloadReceived(String id, Payload payload) {
+        NearbyDevice? sender = null;
+
+        for (var directDevice in _devices.values) {
+            if (directDevice.connectionId == id) {
+                sender = directDevice;
+                break;
+            }
+        }
+        
+        if (sender == null) return;
+        
+        if (payload.type == PayloadType.BYTES) {
+            tryLog(DebugMessageType.error, () {
+                final jsonString = utf8.decode(payload.bytes!);
+                final Map<String, dynamic> data = jsonDecode(jsonString);
+                
+                Message? message = 
+                    TextMessage.fromJson(data)
+                    ?? NameUpdateMessage.fromJson(data)
+                    ?? RouteUpdateMessage.fromJson(data)
+                    ?? ErrorMessage.fromJson(data);
+                    
+                if (message == null) {
+                    logWarn("Unknown message format from: ${sender!.name}.");
+                }
+                
+                _routingManager._onMessageReceived(sender!, message!);
+            });
+        }
+    }
+
+    Future<void> _onConnectionResult(String id, Status status) async {
+        await _lock.synchronized(() async {
+            NearbyDevice? device = null;
+
+            for (var directDevice in _devices.values) {
+                if (directDevice.connectionId == id) {
+                    device = directDevice;
+                    break;
+                }
+            }
+            
+            logDebug("Connection Result - preview: $device\n$status");
+
+            if (device == null) return;
+            
+            if (status == Status.CONNECTED) {
+                device.status = DeviceStatus.connected;
+                if (_localEndpointName != null) {
+                    await _onSendMessage(device, NameUpdateMessage(destination: device.uuid, newName: _localEndpointName!));
+                }
+            } else {
+                device.status = DeviceStatus.discovered;
+            }
+            
+            logDebug("Connection Result - final: $device");
+        });
+        
+        notifyListeners();
+    }
+    
+    Future<void> _onDisconnected(String id) async {
+        logDebug("Disconnected: $id");
+        await _lock.synchronized(() => _devices.values.forEach((device) {
+            if (device.connectionId == id) device.status = DeviceStatus.discovered;
+        }));
+        
+        notifyListeners();
+    }
+
+    Future<T> _onModifyNearbyDevices<T>(Future<T> Function(Map<DeviceUuid, NearbyDevice> devices) func) async {
+        final result = await _lock.synchronized(() async => await func(_devices));
+
+        notifyListeners();
+        return result;
+    }
+
+    Future<void> _onSendMessage(NearbyDevice destination, Message message) async {
+        await tryLogAsync(DebugMessageType.error, () async {
+            final jsonString = jsonEncode(message.toJson());
+            final bytes = Uint8List.fromList(utf8.encode(jsonString));
+            
+            await Nearby().sendBytesPayload(destination.connectionId, bytes);
+        });
+    }
+}
+
+class RoutingManager {
+    void _onMessageReceived(NearbyDevice sender, Message message) {
+        NearbyManager()._onModifyNearbyDevices((devices) async {
+            if (sender.status != DeviceStatus.connected) {
+                logWarn("Received a message from: ${sender.name}, which is not connected.");
+            }
+
+            switch (message) {
+                case TextMessage():
+                    logInfo("TextMessage from: ${sender.name}.");
+                    _handleTextMessage(sender, devices, message);
+                    break;
+
+                case NameUpdateMessage():
+                    logInfo("NameUpdateMessage from: ${sender.name}.");
+                    sender.name = message.newName;
+                    break;
+
+                case RouteUpdateMessage():
+                    logInfo("RouteUpdateMessage from: ${sender.name}.");
+                    _handleRouteUpdateMessage(sender, devices, message);
+                    break;
+
+                case AckMessage():
+                    logInfo("AckMessage from: ${sender.name}.");
+                    break;
+
+                case ErrorMessage():
+                    logInfo("ErrorMessage from: ${sender.name}.");
+                    break;
+            }
+        });
+    }
+    
+    Future<void> _handleTextMessage(
+        NearbyDevice sender,
+        Map<DeviceUuid, NearbyDevice> devices,
+        TextMessage message
+    ) async {
+        // This means that the message is for this device.
+        if (message.destination == NearbyManager().localUuid) {
+            NearbyManager()._onSendMessage(
+                sender,
+                AckMessage(
+                    destination: sender.uuid, 
+                    messageId: message.id
+                )
+            );
+            NearbyManager()._textMessages.putIfAbsent(
+                sender.uuid,
+                () => []
+            ).add(message);
+            return;
+        }
+        
+        await _forwardMessage(devices, message);
+    }
+    
+    Future<void> _handleRouteUpdateMessage(
+        NearbyDevice sender,
+        Map<DeviceUuid, NearbyDevice> devices,
+        RouteUpdateMessage message
+    ) async {
+        // We do not expect to receive route updates not meant for us.
+        if (message.destination != NearbyManager().localUuid) {
+            logWarn("Received route update for a non nearby device.");
+            return;
+        }
+        
+        _updateRoutingTableIncoming(sender, devices, message.nodes);
+
+        await NearbyManager()._onSendMessage(
+            sender,
+            AckMessage(
+                destination: sender.uuid,
+                messageId: message.id
+            )
+        );
+    }
+    
+    void _updateRoutingTableIncoming(
+        NearbyDevice sender,
+        Map<DeviceUuid, NearbyDevice> devices,
+        List<FarawayDevice> farawayDevices
+    ) {
+        // Increase the cost.
+        farawayDevices.forEach((farawayDevice) => farawayDevice.cost++);
+
+        final List<int> toRemoveIncoming = [];
+        
+        for (NearbyDevice device in devices.values) {
+            // We will update this guy in one line latter.
+            if (device.uuid == sender.uuid) continue;
+        
+            for (int i = 0; i < farawayDevices.length; i++) {
+                final incomingDevice = farawayDevices[i];
+
+                // If farawayDevice is actually a nearbyDevice.
+                // Or localDevice.
+                if (
+                    devices[incomingDevice.uuid] != null 
+                    || incomingDevice.uuid == NearbyManager().localUuid
+                ) {
+                    // No need to keep this on the table then.
+                    toRemoveIncoming.add(i);
+                    continue;
+                }
+                
+                final List<int> toRemoveInternal = [];
+                for (int j = 0; j < device.table.length; j++) {
+                    final tableDevice = device.table[j];
+                    
+                    if (incomingDevice.uuid == tableDevice.uuid) {
+                        if (incomingDevice.cost > tableDevice.cost) {
+                            toRemoveIncoming.add(i);
+                        } else {
+                            toRemoveInternal.add(j);
+                        }
+                    }
+                }
+                // Removing previous known farawayDevices that are now inefficient.
+                toRemoveInternal.sort((a, b) => b.compareTo(a));
+                for (int toRemove in toRemoveInternal) {
+                    device.table.removeAt(toRemove);
+                }
+            }
+        }
+        
+        // Removing incoming farawayDevices that are inefficient.
+        toRemoveIncoming.sort((a, b) => b.compareTo(a));
+        for (int toRemove in toRemoveIncoming) {
+            farawayDevices.removeAt(toRemove);
+        }
+        
+        // Updating the table of the sender.
+        sender.table = farawayDevices;
+    }
+
+    Future<void> sendTextMessageNearby(TextMessage message) async {
+        final destination = NearbyManager()._devices[message.destination];
+        
+        if (destination == null || destination.status != DeviceStatus.connected) {
+            logWarn("Trying to send TextMessage to a disconnected device.");
+            return;
+        } 
+
+        NearbyManager()._textMessages.putIfAbsent(
+            destination.uuid,
+            () => [],
+        ).add(message);
+        await NearbyManager()._onSendMessage(destination, message);
+    }
+
+    Future<void> _forwardMessage(
+        Map<DeviceUuid, NearbyDevice> devices,
+        Message message
+    ) async {
+        // Check if it is a NearbyDevice.
+        final destination = devices[message.destination];
+        if (destination != null && destination.uuid == message.destination) {
+            await NearbyManager()._onSendMessage(destination, message);
+        }
+        
+        // Check for all possible FarawayDevices.
+        for (NearbyDevice nearbyDevice in devices.values) {
+            for (FarawayDevice farawayDevice in nearbyDevice.table) {
+                // Sending to the nearby that can send to the destination.
+                if (farawayDevice.uuid == message.destination) {
+                    await NearbyManager()._onSendMessage(nearbyDevice, message);
+                    return;
+                }
+            }
+        }
+    }
+}
