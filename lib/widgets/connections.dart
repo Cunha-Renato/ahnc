@@ -196,18 +196,45 @@ class _DeviceList extends StatelessWidget {
     Widget build(BuildContext context) {
         final nearby = NearbyManager();
         final devices = nearby.devices;
+        final fdevices = [];
 
-        return ListView.builder(
-            itemCount: devices.length,
-            itemBuilder: (context, index) {
-                final device = devices[index];
+        devices.forEach((ndevice) {
+            final listTile = ndevice.table.map((fdevice) {
                 return ListTile(
-                    title: Text("${device.name ?? device.uuid.toString()} (${device.connectionId})"),
-                    subtitle: Text(device.status.name),
-                    trailing: _statusIcon(device.status),
-                    onTap: () => onTap(device.uuid),
+                    title: Text("${fdevice.deviceName}, from: (${ndevice.name})"),
+                    subtitle: Text(ndevice.status.name),
+                    trailing: _statusIcon(ndevice.status),
+                    onTap: () => onTap(fdevice.uuid),
                 );
-            },
+            });
+            
+            fdevices.addAll(listTile);
+        });
+
+        return Column(
+            children: [
+                Text("Nearby"),
+                Expanded(child: ListView.builder(
+                    itemCount: devices.length,
+                    itemBuilder: (context, index) {
+                        final device = devices[index];
+
+                        return ListTile(
+                            title: Text("${device.name ?? device.uuid.toString()} (${device.connectionId})"),
+                            subtitle: Text(device.status.name),
+                            trailing: _statusIcon(device.status),
+                            onTap: () => onTap(device.uuid),
+                        );
+                    },
+                )),
+                Text("Faraway"),
+                Expanded(child: ListView.builder(
+                    itemCount: fdevices.length,
+                    itemBuilder: (context, index) {
+                        return fdevices[index];
+                    },
+                )),
+            ],
         );
     }
 
@@ -330,7 +357,7 @@ class _ChatListState extends State<_ChatList> {
                                     destination: widget.currentChat,
                                     text: _controller.text
                                 );
-                                await NearbyManager().routingManager.sendTextMessageNearby(message);
+                                await NearbyManager().sendMessage(message);
                                 setState(() {
                                     _controller.clear();
                                 });

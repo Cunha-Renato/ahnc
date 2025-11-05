@@ -1,9 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:ahnc/message.dart';
 import 'package:ahnc/widgets/debug_console.dart';
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:nearby_connections/nearby_connections.dart';
 import 'package:synchronized/synchronized.dart';
@@ -73,6 +73,20 @@ class FarawayDevice {
     int cost;
     
     FarawayDevice(this.uuid, this.deviceName, this.cost);
+
+    factory FarawayDevice.fromJson(Map<String, dynamic> json) {
+        return FarawayDevice(
+            DeviceUuid.fromString(json['uuid'] as String), 
+            json['deviceName'] as String,
+            json['cost'] as int
+        );
+    }
+    
+    Map<String, dynamic> toJson() => {
+        'uuid': uuid.toString(),
+        'deviceName': deviceName,
+        'cost': cost
+    };
 }
 
 class NearbyManager extends ChangeNotifier {
@@ -84,6 +98,22 @@ class NearbyManager extends ChangeNotifier {
     factory NearbyManager() => _instance;
     NearbyManager._internal() {
         _startAdvertising();
+        
+        Timer.periodic(const Duration(seconds: 15), (_) async {
+            final snapshot = Map<DeviceUuid, NearbyDevice>.from(_devices);
+
+            for (final nearby in snapshot.values) {
+                tryLogAsync(DebugMessageType.error, () async {
+                    await _onSendMessage(
+                        nearby,
+                        RouteUpdateMessage(
+                            destination: nearby.uuid,
+                            nodes: _routingManager._prepareRoutingTableToSend(nearby, snapshot),
+                        )
+                    );                   
+                });
+            }
+        });
     }
     
     final Map<DeviceUuid, NearbyDevice> _devices = {};
@@ -342,11 +372,15 @@ class NearbyManager extends ChangeNotifier {
             await Nearby().sendBytesPayload(destination.connectionId, bytes);
         });
     }
+
+    Future<void> sendMessage(TextMessage message) async {
+        _routingManager._forwardMessage(_devices, message);
+    }
 }
 
 class RoutingManager {
-    void _onMessageReceived(NearbyDevice sender, Message message) {
-        NearbyManager()._onModifyNearbyDevices((devices) async {
+    Future<void> _onMessageReceived(NearbyDevice sender, Message message) async {
+        await NearbyManager()._onModifyNearbyDevices((devices) async {
             if (sender.status != DeviceStatus.connected) {
                 logWarn("Received a message from: ${sender.name}, which is not connected.");
             }
@@ -364,6 +398,7 @@ class RoutingManager {
 
                 case RouteUpdateMessage():
                     logInfo("RouteUpdateMessage from: ${sender.name}.");
+                    logInfo("${message.nodes}");
                     _handleRouteUpdateMessage(sender, devices, message);
                     break;
 
@@ -376,6 +411,14 @@ class RoutingManager {
                     break;
             }
         });
+
+        await NearbyManager()._onSendMessage(
+            sender,
+            AckMessage(
+                destination: sender.uuid, 
+                messageId: message.id
+            )
+        );
     }
     
     Future<void> _handleTextMessage(
@@ -385,13 +428,6 @@ class RoutingManager {
     ) async {
         // This means that the message is for this device.
         if (message.destination == NearbyManager().localUuid) {
-            NearbyManager()._onSendMessage(
-                sender,
-                AckMessage(
-                    destination: sender.uuid, 
-                    messageId: message.id
-                )
-            );
             NearbyManager()._textMessages.putIfAbsent(
                 sender.uuid,
                 () => []
@@ -414,14 +450,6 @@ class RoutingManager {
         }
         
         _updateRoutingTableIncoming(sender, devices, message.nodes);
-
-        await NearbyManager()._onSendMessage(
-            sender,
-            AckMessage(
-                destination: sender.uuid,
-                messageId: message.id
-            )
-        );
     }
     
     void _updateRoutingTableIncoming(
@@ -482,20 +510,6 @@ class RoutingManager {
         sender.table = farawayDevices;
     }
 
-    Future<void> sendTextMessageNearby(TextMessage message) async {
-        final destination = NearbyManager()._devices[message.destination];
-        
-        if (destination == null || destination.status != DeviceStatus.connected) {
-            logWarn("Trying to send TextMessage to a disconnected device.");
-            return;
-        } 
-
-        NearbyManager()._textMessages.putIfAbsent(
-            destination.uuid,
-            () => [],
-        ).add(message);
-        await NearbyManager()._onSendMessage(destination, message);
-    }
 
     Future<void> _forwardMessage(
         Map<DeviceUuid, NearbyDevice> devices,
@@ -503,7 +517,7 @@ class RoutingManager {
     ) async {
         // Check if it is a NearbyDevice.
         final destination = devices[message.destination];
-        if (destination != null && destination.uuid == message.destination) {
+        if (destination != null && destination.uuid == message.destination && destination.status == DeviceStatus.connected) {
             await NearbyManager()._onSendMessage(destination, message);
         }
         
@@ -511,11 +525,24 @@ class RoutingManager {
         for (NearbyDevice nearbyDevice in devices.values) {
             for (FarawayDevice farawayDevice in nearbyDevice.table) {
                 // Sending to the nearby that can send to the destination.
-                if (farawayDevice.uuid == message.destination) {
+                if (farawayDevice.uuid == message.destination && nearbyDevice.status == DeviceStatus.connected) {
                     await NearbyManager()._onSendMessage(nearbyDevice, message);
                     return;
                 }
             }
         }
+    }
+    
+    List<FarawayDevice> _prepareRoutingTableToSend(NearbyDevice destination, Map<DeviceUuid, NearbyDevice> devices) {
+        final List<FarawayDevice> result = [];
+        
+        for (NearbyDevice device in devices.values) {
+            if (device.uuid == destination.uuid) continue;
+            
+            result.add(FarawayDevice(device.uuid, device.name ?? device.uuid.toString(), 0));
+            result.addAll(device.table);
+        }
+        
+        return result;
     }
 }

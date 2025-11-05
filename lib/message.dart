@@ -86,7 +86,7 @@ class RouteUpdateMessage extends Message {
         jsonMessageType: 'RouteUpdate',
         jsonMessageId: id,
         jsonMessageDestination: destination.toString(),
-        jsonMessageContents: nodes,
+        jsonMessageContents: nodes.map((n) => n.toJson()).toList(),
     };
     
     static RouteUpdateMessage? fromJson(Map<String, dynamic> json) {
@@ -96,7 +96,9 @@ class RouteUpdateMessage extends Message {
             return RouteUpdateMessage.withId(
                 json[jsonMessageId]! as String,
                 destination: DeviceUuid.fromString(json[jsonMessageDestination]! as String),
-                nodes: List<FarawayDevice>.from(json[jsonMessageContents]!),
+                nodes: List<dynamic>.from(json[jsonMessageContents]!)
+                    .map((d) => FarawayDevice.fromJson(Map<String, dynamic>.from(d)))
+                    .toList(),
             );
         } catch(_) {
             return null;
