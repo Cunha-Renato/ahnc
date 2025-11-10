@@ -285,6 +285,7 @@ class _ChatListState extends State<_ChatList> {
     Widget build(BuildContext context) {
         final nearby = context.watch<NearbyManager>();
         final chatMessages = nearby.getTextMessages(widget.currentChat);
+        final messageSource = nearby.getUuidName(widget.currentChat);
 
         return Column(
             children: [
@@ -316,7 +317,7 @@ class _ChatListState extends State<_ChatList> {
                                                 : CrossAxisAlignment.start,
                                             children: [
                                                 Text(
-                                                    isLocal ? "You" : nearby.getUuidName(msg.source),
+                                                    isLocal ? "You" : messageSource,
                                                     style: const TextStyle(
                                                         fontWeight: FontWeight.bold,
                                                         color: Colors.white,
@@ -358,7 +359,10 @@ class _ChatListState extends State<_ChatList> {
                                     destination: widget.currentChat,
                                     text: _controller.text
                                 );
-                                await NearbyManager().sendMessage(message);
+
+                                await nearby.sendMessage(message);
+                                nearby.addTextMessage(widget.currentChat, message);
+
                                 setState(() {
                                     _controller.clear();
                                 });

@@ -138,6 +138,10 @@ class NearbyManager extends ChangeNotifier {
         return (_textMessages[uuid] ?? []).toList();
     } 
     
+    void addTextMessage(DeviceUuid chatUuid, TextMessage message) {
+        _textMessages.putIfAbsent(chatUuid, () => []).add(message);
+    }
+
     Future<void> configure(String endpointName, String? serviceId) async {
         final shouldBroadcast = _localEndpointName != endpointName;
         _localEndpointName = endpointName;
@@ -312,10 +316,11 @@ class NearbyManager extends ChangeNotifier {
                     TextMessage.fromJson(data)
                     ?? NameUpdateMessage.fromJson(data)
                     ?? RouteUpdateMessage.fromJson(data)
+                    ?? AckMessage.fromJson(data)
                     ?? ErrorMessage.fromJson(data);
                     
                 if (message == null) {
-                    logWarn("Unknown message format from: ${sender!.name}.");
+                    logWarn("Unknown message format from: ${sender!.name}.\n${jsonString}");
                 }
                 
                 _routingManager._onMessageReceived(sender!, message!);

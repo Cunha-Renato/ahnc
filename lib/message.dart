@@ -29,6 +29,7 @@ class TextMessage extends Message {
     Map<String, dynamic> toJson() => {
         jsonMessageType: 'Text',
         jsonMessageId: id,
+        jsonMessageSource: source.toString(),
         jsonMessageDestination: destination.toString(),
         jsonMessageContents: text,
     };
@@ -39,8 +40,8 @@ class TextMessage extends Message {
             
             return TextMessage.withId(
                 json[jsonMessageId]! as String,
-                destination: DeviceUuid.fromString(json[jsonMessageDestination]! as String),
                 source: DeviceUuid.fromString(json[jsonMessageSource]! as String),
+                destination: DeviceUuid.fromString(json[jsonMessageDestination]! as String),
                 text: json[jsonMessageContents]! as String
             );
         } catch(_) {
@@ -59,6 +60,7 @@ class NameUpdateMessage extends Message {
     Map<String, dynamic> toJson() => {
         jsonMessageType: 'NameUpdate',
         jsonMessageId: id,
+        jsonMessageSource: source.toString(),
         jsonMessageDestination: destination.toString(),
         jsonMessageContents: newName,
     };
@@ -69,8 +71,8 @@ class NameUpdateMessage extends Message {
             
             return NameUpdateMessage.withId(
                 json[jsonMessageId]! as String,
-                destination: DeviceUuid.fromString(json[jsonMessageDestination]! as String),
                 source: DeviceUuid.fromString(json[jsonMessageSource]! as String),
+                destination: DeviceUuid.fromString(json[jsonMessageDestination]! as String),
                 newName: json[jsonMessageContents]! as String
             );
         } catch(_) {
@@ -89,6 +91,7 @@ class RouteUpdateMessage extends Message {
     Map<String, dynamic> toJson() => {
         jsonMessageType: 'RouteUpdate',
         jsonMessageId: id,
+        jsonMessageSource: source.toString(),
         jsonMessageDestination: destination.toString(),
         jsonMessageContents: nodes.map((n) => n.toJson()).toList(),
     };
@@ -99,8 +102,8 @@ class RouteUpdateMessage extends Message {
 
             return RouteUpdateMessage.withId(
                 json[jsonMessageId]! as String,
-                destination: DeviceUuid.fromString(json[jsonMessageDestination]! as String),
                 source: DeviceUuid.fromString(json[jsonMessageSource]! as String),
+                destination: DeviceUuid.fromString(json[jsonMessageDestination]! as String),
                 nodes: List<dynamic>.from(json[jsonMessageContents]!)
                     .map((d) => FarawayDevice.fromJson(Map<String, dynamic>.from(d)))
                     .toList(),
@@ -121,6 +124,7 @@ class AckMessage extends Message {
     Map<String, dynamic> toJson() => {
         jsonMessageType: 'Ack',
         jsonMessageId: id,
+        jsonMessageSource: source.toString(),
         jsonMessageDestination: destination.toString(),
         jsonMessageContents: messageId,
     };
@@ -131,8 +135,8 @@ class AckMessage extends Message {
 
             return AckMessage.withId(
                 json[jsonMessageId]! as String,
-                destination: DeviceUuid.fromString(json[jsonMessageDestination]! as String),
                 source: DeviceUuid.fromString(json[jsonMessageSource]! as String),
+                destination: DeviceUuid.fromString(json[jsonMessageDestination]! as String),
                 messageId: json[jsonMessageContents]! as String
             );
         } catch(_) {
@@ -163,20 +167,21 @@ class ErrorMessage extends Message {
     Map<String, dynamic> toJson() => {
         jsonMessageType: 'Error',
         jsonMessageId: id,
+        jsonMessageSource: source.toString(),
         jsonMessageDestination: destination.toString(),
         jsonMessageContents: [messageId, error],
     };
 
     static ErrorMessage? fromJson(Map<String, dynamic> json) {
         try {
-            if (json[jsonMessageType]! != 'Text') return null;
+            if (json[jsonMessageType]! != 'Error') return null;
             
             final contents = List<String>.from(json[jsonMessageContents]!);
 
             return ErrorMessage.withId(
                 json[jsonMessageId]! as String,
-                destination: DeviceUuid.fromString(json[jsonMessageDestination]! as String),
                 source: DeviceUuid.fromString(json[jsonMessageSource]! as String),
+                destination: DeviceUuid.fromString(json[jsonMessageDestination]! as String),
                 messageId: contents[0],
                 error: contents[1],
             );
