@@ -316,7 +316,7 @@ class _ChatListState extends State<_ChatList> {
                                                 : CrossAxisAlignment.start,
                                             children: [
                                                 Text(
-                                                    isLocal ? "You" : "CHANGE TO CURRENT CHAT",
+                                                    isLocal ? "You" : nearby.getUuidName(msg.source),
                                                     style: const TextStyle(
                                                         fontWeight: FontWeight.bold,
                                                         color: Colors.white,

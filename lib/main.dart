@@ -54,9 +54,6 @@ class HomePageState extends State<HomePage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                     HandlePermissions(),
-                    // Expanded(
-                    //     child: ConnectionsPage(),
-                    // ),
                     Expanded(child: ChangeNotifierProvider(
                         create: (_) => NearbyManager(),
                         child: Connections(),

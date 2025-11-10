@@ -385,6 +385,18 @@ class NearbyManager extends ChangeNotifier {
     Future<void> sendMessage(TextMessage message) async {
         _routingManager._forwardMessage(_devices, message);
     }
+
+    String getUuidName(DeviceUuid uuid) {
+        for (var nd in _devices.values) {
+            if (nd.uuid == uuid) return nd.name ?? nd.uuid.toString();
+            
+            for (var fd in nd.table) {
+                if (fd.uuid == uuid) return fd.deviceName;
+            }
+        }
+        
+        return uuid.toString();
+    }
 }
 
 class RoutingManager {
