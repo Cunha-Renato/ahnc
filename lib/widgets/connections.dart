@@ -354,6 +354,7 @@ class _ChatListState extends State<_ChatList> {
                                 if (_controller.text.isEmpty) return;
 
                                 final message = TextMessage(
+                                    source: nearby.localUuid,
                                     destination: widget.currentChat,
                                     text: _controller.text
                                 );

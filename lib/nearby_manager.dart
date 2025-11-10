@@ -107,6 +107,7 @@ class NearbyManager extends ChangeNotifier {
                     await _onSendMessage(
                         nearby,
                         RouteUpdateMessage(
+                            source: _localUuid,
                             destination: nearby.uuid,
                             nodes: _routingManager._prepareRoutingTableToSend(nearby, snapshot),
                         )
@@ -151,7 +152,11 @@ class NearbyManager extends ChangeNotifier {
                 if (device.status == DeviceStatus.connected) {
                     await _onSendMessage(
                         device,
-                        NameUpdateMessage(destination: device.uuid, newName: endpointName)
+                        NameUpdateMessage(
+                            source: _localUuid,
+                            destination: device.uuid, 
+                            newName: endpointName
+                        )
                     );
                 }
             }
@@ -336,7 +341,11 @@ class NearbyManager extends ChangeNotifier {
             if (status == Status.CONNECTED) {
                 device.status = DeviceStatus.connected;
                 if (_localEndpointName != null) {
-                    await _onSendMessage(device, NameUpdateMessage(destination: device.uuid, newName: _localEndpointName!));
+                    await _onSendMessage(device, NameUpdateMessage(
+                        source: _localUuid,
+                        destination: device.uuid, 
+                        newName: _localEndpointName!
+                    ));
                 }
             } else {
                 device.status = DeviceStatus.discovered;
@@ -415,6 +424,7 @@ class RoutingManager {
         await NearbyManager()._onSendMessage(
             sender,
             AckMessage(
+                source: NearbyManager().localUuid,
                 destination: sender.uuid, 
                 messageId: message.id
             )
@@ -429,7 +439,7 @@ class RoutingManager {
         // This means that the message is for this device.
         if (message.destination == NearbyManager().localUuid) {
             NearbyManager()._textMessages.putIfAbsent(
-                sender.uuid,
+                message.source,
                 () => []
             ).add(message);
             return;
@@ -460,7 +470,7 @@ class RoutingManager {
         // Increase the cost.
         farawayDevices.forEach((farawayDevice) => farawayDevice.cost++);
 
-        final List<int> toRemoveIncoming = [];
+        final List<DeviceUuid> toRemoveIncoming = [];
         
         for (NearbyDevice device in devices.values) {
             // We will update this guy in one line latter.
@@ -476,40 +486,34 @@ class RoutingManager {
                     || incomingDevice.uuid == NearbyManager().localUuid
                 ) {
                     // No need to keep this on the table then.
-                    toRemoveIncoming.add(i);
+                    toRemoveIncoming.add(incomingDevice.uuid);
                     continue;
                 }
                 
-                final List<int> toRemoveInternal = [];
+                final List<DeviceUuid> toRemoveInternal = [];
                 for (int j = 0; j < device.table.length; j++) {
                     final tableDevice = device.table[j];
                     
                     if (incomingDevice.uuid == tableDevice.uuid) {
                         if (incomingDevice.cost > tableDevice.cost) {
-                            toRemoveIncoming.add(i);
+                            toRemoveIncoming.add(incomingDevice.uuid);
                         } else {
-                            toRemoveInternal.add(j);
+                            toRemoveInternal.add(tableDevice.uuid);
                         }
                     }
                 }
+
                 // Removing previous known farawayDevices that are now inefficient.
-                toRemoveInternal.sort((a, b) => b.compareTo(a));
-                for (int toRemove in toRemoveInternal) {
-                    device.table.removeAt(toRemove);
-                }
+                device.table = device.table.where((d) => !toRemoveInternal.contains(d.uuid)).toList();
             }
         }
         
         // Removing incoming farawayDevices that are inefficient.
-        toRemoveIncoming.sort((a, b) => b.compareTo(a));
-        for (int toRemove in toRemoveIncoming) {
-            farawayDevices.removeAt(toRemove);
-        }
-        
+        farawayDevices = farawayDevices.where((fd) => !toRemoveIncoming.contains(fd.uuid)).toList();
+
         // Updating the table of the sender.
         sender.table = farawayDevices;
     }
-
 
     Future<void> _forwardMessage(
         Map<DeviceUuid, NearbyDevice> devices,
