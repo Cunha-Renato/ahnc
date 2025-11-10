@@ -188,9 +188,9 @@ class _ConnectionsState extends State<Connections> {
 }
 
 class _DeviceList extends StatelessWidget {
-    final onTap;
+    final void Function(DeviceUuid) onTap;
     
-    _DeviceList({required void Function(DeviceUuid) this.onTap});
+    _DeviceList({required this.onTap});
 
     @override
     Widget build(BuildContext context) {
@@ -223,7 +223,8 @@ class _DeviceList extends StatelessWidget {
                             title: Text("${device.name ?? device.uuid.toString()} (${device.connectionId})"),
                             subtitle: Text(device.status.name),
                             trailing: _statusIcon(device.status),
-                            onTap: () => onTap(device.uuid),
+                            onTap: device.status == DeviceStatus.blocked ? null : () => onTap(device.uuid),
+                            onLongPress: () => _showBlockDialog(context, device),
                         );
                     },
                 )),
@@ -238,6 +239,40 @@ class _DeviceList extends StatelessWidget {
         );
     }
 
+    Future<void> _showBlockDialog(BuildContext context, NearbyDevice device) async {
+        final nearby = NearbyManager();
+        final isBlocked = device.status == DeviceStatus.blocked;
+
+        await showDialog(
+            context: context,
+            builder: (context) {
+                return AlertDialog(
+                    title: Text('${isBlocked ? "Unblock" : "Block"} ${device.name ?? device.uuid.toString()}'),
+                    content: Text('Would you like to ${isBlocked ? "unblock" : "block"} this device?'),
+                    actions: [
+                        TextButton(
+                            onPressed: () {
+                                Navigator.pop(context);
+                            },
+                            child: const Text('Cancel'),
+                        ),
+                        TextButton(
+                            onPressed: () {
+                                if (isBlocked) {
+                                    nearby.unblockDevice(device.uuid);
+                                } else {
+                                    nearby.blockDevice(device.uuid);
+                                }
+                                Navigator.pop(context);
+                            },
+                            child: Text(isBlocked ? 'Unblock' : 'Block'),
+                        ),
+                    ],
+                );
+            },
+        );
+    }
+
     Widget _statusIcon(DeviceStatus status) {
         switch (status) {
             case DeviceStatus.discovered:
@@ -246,6 +281,8 @@ class _DeviceList extends StatelessWidget {
                 return const Icon(Icons.sync, color: Colors.orange);
             case DeviceStatus.connected:
                 return const Icon(Icons.check_circle, color: Colors.green);
+            case DeviceStatus.blocked:
+                return const Icon(Icons.block, color: Colors.red);
         }
     }
 }

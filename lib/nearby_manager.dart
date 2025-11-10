@@ -34,12 +34,14 @@ enum DeviceStatus {
     connected,
     connecting, 
     discovered, 
+    blocked,
 }
 int _statusToNumber(DeviceStatus status) {
     switch (status) {
         case DeviceStatus.connected: return 0;
         case DeviceStatus.connecting: return 1;
         case DeviceStatus.discovered: return 2;
+        case DeviceStatus.blocked: return 3;
     }
 }
 
@@ -142,6 +144,23 @@ class NearbyManager extends ChangeNotifier {
         _textMessages.putIfAbsent(chatUuid, () => []).add(message);
     }
 
+    void blockDevice(DeviceUuid uuid) {
+        final device = _devices[uuid];
+        if (device == null) return;
+
+        device.status = DeviceStatus.blocked;
+        Nearby().disconnectFromEndpoint(device.connectionId);
+        notifyListeners();
+    }
+    
+    void unblockDevice(DeviceUuid uuid) {
+        final device = _devices[uuid];
+        if (device == null) return;
+
+        device.status = DeviceStatus.discovered;
+        notifyListeners();
+    }
+    
     Future<void> configure(String endpointName, String? serviceId) async {
         final shouldBroadcast = _localEndpointName != endpointName;
         _localEndpointName = endpointName;
@@ -216,8 +235,10 @@ class NearbyManager extends ChangeNotifier {
                     
                     logDebug("Endpoint found: $device");
 
-                    if (device.status != DeviceStatus.discovered) {
+                    if (device.status == DeviceStatus.connected || device.status == DeviceStatus.connecting) {
                         logDebug("Endpoint is alwready connected or connecting: returning from onEndpointFound.");
+                        return;
+                    } else if (device.status == DeviceStatus.blocked) {
                         return;
                     }
 
@@ -268,7 +289,7 @@ class NearbyManager extends ChangeNotifier {
     }
     
     Future<void> _onConnectionInitiated(String id, ConnectionInfo info) async {
-        await _lock.synchronized(() { 
+        final blocked = await _lock.synchronized(() { 
             final endpointUuid = DeviceUuid.fromString(info.endpointName);
             NearbyDevice device = _devices.putIfAbsent(
                 endpointUuid,
@@ -284,12 +305,21 @@ class NearbyManager extends ChangeNotifier {
             device.connectionId = id;
             if (device.status == DeviceStatus.discovered) device.status = DeviceStatus.connecting; 
             
+            if (device.status == DeviceStatus.blocked) return true;
             logDebug("Connection Initiated - final: $device");
+            
+            return false;
         });
-        
+
+        if (blocked) {
+            await Nearby().rejectConnection(id);
+
+            return;
+        }
+
         notifyListeners();
         
-        Nearby().acceptConnection(
+        await Nearby().acceptConnection(
             id, 
             onPayLoadRecieved: _onPayloadReceived,
         );
@@ -353,7 +383,8 @@ class NearbyManager extends ChangeNotifier {
                     ));
                 }
             } else {
-                device.status = DeviceStatus.discovered;
+                if (device.status != DeviceStatus.blocked)
+                    device.status = DeviceStatus.discovered;
             }
             
             logDebug("Connection Result - final: $device");
@@ -365,7 +396,7 @@ class NearbyManager extends ChangeNotifier {
     Future<void> _onDisconnected(String id) async {
         logDebug("Disconnected: $id");
         await _lock.synchronized(() => _devices.values.forEach((device) {
-            if (device.connectionId == id) device.status = DeviceStatus.discovered;
+            if (device.connectionId == id && device.status != DeviceStatus.blocked) device.status = DeviceStatus.discovered;
         }));
         
         notifyListeners();
@@ -406,7 +437,7 @@ class NearbyManager extends ChangeNotifier {
 
 class RoutingManager {
     Future<void> _onMessageReceived(NearbyDevice sender, Message message) async {
-        await NearbyManager()._onModifyNearbyDevices((devices) async {
+        final sendAck = await NearbyManager()._onModifyNearbyDevices((devices) async {
             if (sender.status != DeviceStatus.connected) {
                 logWarn("Received a message from: ${sender.name}, which is not connected.");
             }
@@ -430,13 +461,17 @@ class RoutingManager {
 
                 case AckMessage():
                     logInfo("AckMessage from: ${sender.name}.");
-                    break;
+                    return false;
 
                 case ErrorMessage():
                     logInfo("ErrorMessage from: ${sender.name}.");
-                    break;
+                    return false;
             }
+            
+            return true;
         });
+        
+        if (!sendAck) return;
 
         await NearbyManager()._onSendMessage(
             sender,
