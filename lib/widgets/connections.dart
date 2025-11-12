@@ -194,7 +194,7 @@ class _DeviceList extends StatelessWidget {
 
     @override
     Widget build(BuildContext context) {
-        final nearby = NearbyManager();
+        final nearby = context.watch<NearbyManager>();
         final devices = nearby.devices;
         final fdevices = [];
 
@@ -224,6 +224,29 @@ class _DeviceList extends StatelessWidget {
                             subtitle: Text(device.status.name),
                             trailing: _statusIcon(device.status),
                             onTap: () => onTap(device.uuid),
+                            onLongPress: () async {
+                                final bool? shouldDisconnect = await showDialog(
+                                    context: context,
+                                    builder: (context) => AlertDialog(
+                                        title: const Text('Disconnect'),
+                                        content: Text('Are you sure you want to disconnect from ${device.name}?'),
+                                        actions: [
+                                            TextButton(
+                                                onPressed: () => Navigator.of(context).pop(false),
+                                                child: const Text('Cancel'),
+                                            ),
+                                            TextButton(
+                                                onPressed: () => Navigator.of(context).pop(true),
+                                                child: const Text('Disconnect'),
+                                            ),
+                                        ],
+                                    ),
+                                );
+
+                                if (shouldDisconnect == true) {
+                                    await nearby.disconnectDevice(device.uuid);
+                                }
+                            },
                         );
                     },
                 )),

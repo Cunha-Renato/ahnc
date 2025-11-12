@@ -39,6 +39,7 @@ class _HandlePermissionsState extends State<HandlePermissions> {
 
         List<Permission> permissions = [];
 
+
         if (sdkInt >= 31) { // Android 12 and above
             permissions.addAll([
                 Permission.bluetoothAdvertise,
@@ -47,7 +48,7 @@ class _HandlePermissionsState extends State<HandlePermissions> {
             ]);
         }
 
-        if (sdkInt >= 30) { // Android 11 and above
+        if (sdkInt >= 33) { 
             permissions.add(Permission.nearbyWifiDevices);
         }
 
@@ -64,6 +65,7 @@ class _HandlePermissionsState extends State<HandlePermissions> {
 
         for (final permission in permissions) {
             final status = await permission.status;
+            debugPrint("Permission: $permission, $status");
             
             if (status.isDenied || status.isPermanentlyDenied) {
                 widget.dialog.setShowDialog(true);

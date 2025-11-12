@@ -99,22 +99,10 @@ class NearbyManager extends ChangeNotifier {
     NearbyManager._internal() {
         _startAdvertising();
         
-        Timer.periodic(const Duration(seconds: 15), (_) async {
-            final snapshot = Map<DeviceUuid, NearbyDevice>.from(_devices);
-
-            for (final nearby in snapshot.values) {
-                tryLogAsync(DebugMessageType.error, () async {
-                    await _onSendMessage(
-                        nearby,
-                        RouteUpdateMessage(
-                            source: _localUuid,
-                            destination: nearby.uuid,
-                            nodes: _routingManager._prepareRoutingTableToSend(nearby, snapshot),
-                        )
-                    );                   
-                });
-            }
-        });
+        Timer.periodic(const Duration(seconds: 15), (_) async => await _routingManager._broadcastTable(
+            _devices,
+            _localUuid
+        ));
     }
     
     final Map<DeviceUuid, NearbyDevice> _devices = {};
@@ -244,8 +232,6 @@ class NearbyManager extends ChangeNotifier {
                         );
                     });
                     
-                    await restartDiscovery();
-
                     notifyListeners();
                 },
               );
@@ -264,6 +250,26 @@ class NearbyManager extends ChangeNotifier {
     Future<void> disconnectAll() async {
         await Nearby().stopAllEndpoints();
         await _lock.synchronized(() => _devices.clear());
+        notifyListeners();
+    }
+
+    Future<void> disconnectDevice(DeviceUuid uuid) async {
+        final device = await _lock.synchronized(() => _devices[uuid]);
+        if (device == null) return;
+
+        try {
+            await Nearby().disconnectFromEndpoint(device.connectionId);
+        } catch (e) {
+            logError("Error disconnecting from endpoint: $e");
+        }
+
+        await _lock.synchronized(() {
+            _devices.remove(uuid);
+            // _textMessages.remove(uuid);
+        });
+        
+        await _routingManager._broadcastTable(_devices, _localUuid);
+        
         notifyListeners();
     }
     
@@ -351,6 +357,8 @@ class NearbyManager extends ChangeNotifier {
                         destination: device.uuid, 
                         newName: _localEndpointName!
                     ));
+                    
+                    await _routingManager._broadcastTable(_devices, _localUuid);
                 }
             } else {
                 device.status = DeviceStatus.discovered;
@@ -364,10 +372,14 @@ class NearbyManager extends ChangeNotifier {
     
     Future<void> _onDisconnected(String id) async {
         logDebug("Disconnected: $id");
-        await _lock.synchronized(() => _devices.values.forEach((device) {
-            if (device.connectionId == id) device.status = DeviceStatus.discovered;
-        }));
+        final deviceUuid = await _lock.synchronized(() {
+            for (var device in _devices.values) 
+                if (device.connectionId == id) return device.uuid;
+        });
         
+        if (deviceUuid != null)
+            await disconnectDevice(deviceUuid);
+
         notifyListeners();
     }
 
@@ -406,7 +418,7 @@ class NearbyManager extends ChangeNotifier {
 
 class RoutingManager {
     Future<void> _onMessageReceived(NearbyDevice sender, Message message) async {
-        await NearbyManager()._onModifyNearbyDevices((devices) async {
+        final sendAck = await NearbyManager()._onModifyNearbyDevices((devices) async {
             if (sender.status != DeviceStatus.connected) {
                 logWarn("Received a message from: ${sender.name}, which is not connected.");
             }
@@ -424,28 +436,30 @@ class RoutingManager {
 
                 case RouteUpdateMessage():
                     logInfo("RouteUpdateMessage from: ${sender.name}.");
-                    logInfo("${message.nodes}");
                     _handleRouteUpdateMessage(sender, devices, message);
                     break;
 
                 case AckMessage():
                     logInfo("AckMessage from: ${sender.name}.");
-                    break;
+                    return false;
 
                 case ErrorMessage():
                     logInfo("ErrorMessage from: ${sender.name}.");
-                    break;
+                    return false;
             }
+            
+            return true;
         });
 
-        await NearbyManager()._onSendMessage(
-            sender,
-            AckMessage(
-                source: NearbyManager().localUuid,
-                destination: sender.uuid, 
-                messageId: message.id
-            )
-        );
+        if(sendAck)
+            await NearbyManager()._onSendMessage(
+                sender,
+                AckMessage(
+                    source: NearbyManager().localUuid,
+                    destination: sender.uuid, 
+                    messageId: message.id
+                )
+            );
     }
     
     Future<void> _handleTextMessage(
@@ -484,52 +498,44 @@ class RoutingManager {
         Map<DeviceUuid, NearbyDevice> devices,
         List<FarawayDevice> farawayDevices
     ) {
-        // Increase the cost.
+        // Increase the cost for routes coming from sender.
         farawayDevices.forEach((farawayDevice) => farawayDevice.cost++);
 
-        final List<DeviceUuid> toRemoveIncoming = [];
-        
-        for (NearbyDevice device in devices.values) {
-            // We will update this guy in one line latter.
-            if (device.uuid == sender.uuid) continue;
-        
-            for (int i = 0; i < farawayDevices.length; i++) {
-                final incomingDevice = farawayDevices[i];
+        // Temporarily assign the new routes to the sender's table.
+        sender.table = farawayDevices;
 
-                // If farawayDevice is actually a nearbyDevice.
-                // Or localDevice.
-                if (
-                    devices[incomingDevice.uuid] != null 
-                    || incomingDevice.uuid == NearbyManager().localUuid
-                ) {
-                    // No need to keep this on the table then.
-                    toRemoveIncoming.add(incomingDevice.uuid);
+        // A map to keep track of the best route for each destination UUID.
+        final Map<DeviceUuid, FarawayDevice> bestRoutes = {};
+        // A map to track the neighbor that provides the best route.
+        final Map<DeviceUuid, NearbyDevice> bestRouteSource = {};
+
+        // Iterate through all neighbors and all their routes to find the best ones.
+        for (final neighbor in devices.values) {
+            for (final route in neighbor.table) {
+                // Skip routes to ourselves or direct neighbors.
+                if (devices.containsKey(route.uuid) || route.uuid == NearbyManager().localUuid) {
                     continue;
                 }
-                
-                final List<DeviceUuid> toRemoveInternal = [];
-                for (int j = 0; j < device.table.length; j++) {
-                    final tableDevice = device.table[j];
-                    
-                    if (incomingDevice.uuid == tableDevice.uuid) {
-                        if (incomingDevice.cost > tableDevice.cost) {
-                            toRemoveIncoming.add(incomingDevice.uuid);
-                        } else {
-                            toRemoveInternal.add(tableDevice.uuid);
-                        }
-                    }
-                }
 
-                // Removing previous known farawayDevices that are now inefficient.
-                device.table = device.table.where((d) => !toRemoveInternal.contains(d.uuid)).toList();
+                // If we haven't seen a route to this destination, or if this new route is cheaper...
+                if (!bestRoutes.containsKey(route.uuid) || route.cost < bestRoutes[route.uuid]!.cost) {
+                    // ...then this is the best route so far.
+                    bestRoutes[route.uuid] = route;
+                    bestRouteSource[route.uuid] = neighbor;
+                }
             }
         }
-        
-        // Removing incoming farawayDevices that are inefficient.
-        farawayDevices = farawayDevices.where((fd) => !toRemoveIncoming.contains(fd.uuid)).toList();
 
-        // Updating the table of the sender.
-        sender.table = farawayDevices;
+        // Now, clear all routing tables.
+        for (final neighbor in devices.values) {
+            neighbor.table.clear();
+        }
+
+        // And rebuild them using only the best routes found.
+        bestRoutes.forEach((routeUuid, route) {
+            final sourceNeighbor = bestRouteSource[routeUuid]!;
+            sourceNeighbor.table.add(route);
+        });
     }
 
     Future<void> _forwardMessage(
@@ -544,9 +550,10 @@ class RoutingManager {
         
         // Check for all possible FarawayDevices.
         for (NearbyDevice nearbyDevice in devices.values) {
+            if (nearbyDevice.status != DeviceStatus.connected) continue;
             for (FarawayDevice farawayDevice in nearbyDevice.table) {
                 // Sending to the nearby that can send to the destination.
-                if (farawayDevice.uuid == message.destination && nearbyDevice.status == DeviceStatus.connected) {
+                if (farawayDevice.uuid == message.destination) {
                     await NearbyManager()._onSendMessage(nearbyDevice, message);
                     return;
                 }
@@ -565,5 +572,24 @@ class RoutingManager {
         }
         
         return result;
+    }
+
+    Future<void> _broadcastTable(Map<DeviceUuid, NearbyDevice> devicesRef, DeviceUuid localUuid) async {
+        final devices = Map<DeviceUuid, NearbyDevice>.from(devicesRef);
+
+        for (final nearby in devices.values) {
+            if (nearby.status != DeviceStatus.connected) continue;
+            
+            await tryLogAsync(DebugMessageType.error, () async {
+                await NearbyManager()._onSendMessage(
+                    nearby,
+                    RouteUpdateMessage(
+                        source: localUuid,
+                        destination: nearby.uuid,
+                        nodes: _prepareRoutingTableToSend(nearby, devices),
+                    )
+                );                   
+            });
+        }       
     }
 }
